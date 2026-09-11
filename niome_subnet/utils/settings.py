@@ -29,7 +29,7 @@ SCORE_DISTRIBUTION = [0.3, 0.2, 0.2, 0.15, 0.05, 0.03, 0.025, 0.02, 0.015, 0.01]
 # ---- Backend Request -----
 BASE_URL = "https://niome-api.genomes.io"
 MINER_SCORE_URL = f"{BASE_URL}/api/v3/miners/scores"
-MINER_SUBMISSION_URL = f"{BASE_URL}/api/v3/miners/submissions"
+MINER_SUBMISSION_URL = f"{BASE_URL}/api/v3/miners/submission-url"
 TASK_URL = f"{BASE_URL}/api/v3/tasks/current"
 CELL_TYPES_URL = f"{BASE_URL}/api/v3/data/cell-types?format=json"
 
@@ -66,7 +66,7 @@ OWNER_HOTKEY = "5DJ5fT174AY8GzbYHnamYQCJd4cTcj2Zf7ogUvBhry1KfYVd"
 
 BASE_BLOCK_NUMBER = 8843300
 INTERVAL_BLOCKS = 720
-VALIDATION_BLOCK = 400
+VALIDATION_BLOCK = 500
 WEIGHT_SET_BLOCK = 700
 
 FINAL_SUBMISSION_COUNT = 5

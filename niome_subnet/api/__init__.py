@@ -146,13 +146,21 @@ def upload_final_submissions_to_server(self, uids: list[int]) -> None:
                 logger.error(f"Error processing UID {uid}: {e}")
                 continue
 
-        payload = {
-            "task_id": self.task_id,
-            "submissions": submissions,
-        }
-
-        post(self, config.MINER_SUBMISSION_URL, payload)
-        logger.info(f"Successfully uploaded final submissions for UIDs: {uids}")
+        data = get(self, f"{config.MINER_SUBMISSION_URL}?task_id={self.task_id}")
+        presigned_url = data["url"]
+        
+        response = requests.put(
+            presigned_url,
+            data=json.dumps(submissions),
+            headers={
+                "Content-Type": "application/json"
+            },
+            timeout=300,
+        )
+        
+        response.raise_for_status()
+        
+        logger.info("Successfully uploaded final submissions")
     except Exception as e:
         logger.error(f"Error in upload_final_submissions_to_server: {e}")
         raise e
