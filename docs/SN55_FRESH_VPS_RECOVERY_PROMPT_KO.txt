@@ -1,0 +1,271 @@
+SN55 신규 VPS 단일 Miner 완전 복구 프롬프트
+
+새 VPS 공인 IPv4: _______________________________________________
+
+완전히 초기화된 새 VPS에서 SN55 메인넷 miner 운영환경을 처음부터 구축하라.
+
+기존 VPS의 IP, wallet, hotkey 이름, UID, PID, PM2 설정과 runtime artifact는 모두 존재하지 않는 것으로 간주하라. GitHub 저장소에 남아 있는 과거 운영 identity나 서버 주소를 그대로 실행하지 말라.
+
+기본 조건:
+- GitHub repository: https://github.com/destiny14bittensor-design/sn55-niome
+- branch: main
+- Bittensor network: finney
+- netuid: 55
+- coldkey 이름: main1
+- hotkey 이름: tao1
+- axon port: 8091
+- dashboard port: 8111
+- 새 VPS 공인 IP는 프롬프트 첫 줄의 값을 사용
+- 처음에는 miner 한 개만 운영
+- PM2 miner 이름: niome-tao1
+- PM2 bridge 이름: niome-seed-bridge-tao1
+- PM2 dashboard 이름: niome-dashboard
+- artifact root: artifacts/miners/tao1
+
+최종 목표:
+새 VPS 준비부터 개발환경, wallet, 메인넷 등록, miner, seed bridge, 로컬 validator, dashboard와 PM2를 구축하고 실제 validator query를 수신하라. 그 과제의 안전 제출, 공개 seed 기반 빌드, 최종 PUT, 로컬 채점, 공식 점수 게시와 순위 확인까지 계속 수행하라.
+
+단순히 프로세스가 online인 상태를 완료로 판단하지 말라. 복구 후 실제 과제의 공식 점수가 확인되어야 완료다.
+
+절대 준수할 원칙:
+1. 과거 배포에 사용된 wallet/hotkey 이름, hotkey 주소, UID, IP, 절대경로를 새 배포에 재사용하지 말라.
+2. 저장소에 과거 운영 identity가 하드코딩되어 있으면 새 main1/tao1 배포와 충돌하지 않도록 환경변수 기반 또는 새 단일-lane 설정으로 정리하라.
+3. mnemonic, coldkey, hotkey 개인키, password, API token을 채팅·로그·Git에 노출하지 말라.
+4. mnemonic을 채팅에 입력하도록 요구하지 말라. wallet 생성이나 복구가 필요하면 사용자가 VPS의 보안 터미널에서 직접 입력하도록 안내하라.
+5. artifacts/, data/, wallet, .env, PM2 dump/log, presigned URL과 request_envelope.json을 Git에 커밋하지 말라.
+6. validator가 제공한 signed URL을 출력하거나 대시보드 API에 노출하지 말라.
+7. optimizer와 제출 알고리즘은 GitHub에 저장된 검증된 구현을 먼저 사용하라. 공식 점수가 확인되기 전에 불필요한 성능 실험을 추가하지 말라.
+8. active task가 진행 중일 때 miner나 bridge를 재시작하지 말라.
+9. 등록비 소각, 유료 서비스 또는 다른 재정적 행동은 사용자 승인 없이 실행하지 말라.
+10. destructive command나 광범위한 삭제 명령을 사용하지 말라.
+
+다음 순서로 진행하라.
+
+1. 새 VPS 감사
+- OS와 architecture를 확인하라.
+- CPU core, RAM, swap, 디스크 용량과 네트워크 상태를 확인하라.
+- 공인 IP가 프롬프트 첫 줄의 값과 일치하는지 확인하라.
+- Git, curl, wget, gzip, build 도구, Python 3.12, Node.js, npm, PM2, uv 설치 여부를 확인하라.
+- 필요한 패키지만 설치하라.
+- 시스템 시간과 UTC 동기화 상태를 확인하라. 체인 timing과 signed URL 만료에 영향을 주므로 시간 오차를 허용하지 말라.
+
+2. 네트워크와 방화벽
+- validator가 TCP 8091에 접근할 수 있도록 OS firewall과 VPS provider firewall을 확인하라.
+- dashboard 8111은 가능하면 운영자 IP로 제한하거나 SSH tunnel을 사용하라.
+- 8091과 8111을 다른 프로세스가 사용하고 있지 않은지 확인하라.
+- 외부에서 8091에 접근 가능한지도 검증하라.
+
+3. 저장소 clone
+- 적절한 운영 경로에 repository의 main을 clone하라.
+- 현재 HEAD와 remote를 기록하라.
+- working tree가 깨끗한지 확인하라.
+- 다음 문서를 먼저 읽어라:
+  - README.md
+  - SECURITY.md
+  - docs/four_miner_operations.md
+  - docs/seed_aware_optimizer_architecture.md
+  - dashboard/README.md
+- 기존 다중 miner 설정은 참고 자료로만 사용하고 과거 miner identity를 시작하지 말라.
+
+4. Python 개발환경
+- Python 3.12를 준비하라.
+- uv sync --frozen으로 lockfile 기반 가상환경을 생성하라.
+- 주요 Python module을 compile/import 검사하라.
+- Node/PM2 manifest도 구문 검사하라.
+- uv run pytest -q로 전체 테스트를 실행하라.
+- 테스트가 실패하면 원인을 진단하고 최소한의 호환성 수정만 구현하라.
+- 전체 테스트가 통과하기 전에는 miner를 시작하지 말라.
+
+5. chromosome 기준 데이터
+- data/chr11.fa를 준비하라.
+- 공식 Ensembl release 116의 GRCh38 chromosome 11 FASTA를 다운로드하고 압축을 풀어라.
+- 다운로드 URL:
+  https://ftp.ensembl.org/pub/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.11.fa.gz
+- 정상 FASTA인지, 첫 record를 읽을 수 있는지, 파일 크기가 합리적인지 확인하라.
+- data/는 Git에서 계속 제외하라.
+
+6. 새 wallet 준비
+- Bittensor wallet 이름은 main1, hotkey alias는 tao1이어야 한다.
+- 먼저 해당 wallet과 hotkey가 VPS에 존재하는지 확인하라.
+- 존재하지 않는다면 현재 설치된 btcli 버전의 정확한 명령을 확인한 후 새 coldkey와 hotkey를 생성하라.
+- 생성 과정에서 mnemonic은 사용자만 볼 수 있게 하고, 안전한 오프라인 백업을 요구하라.
+- mnemonic이나 private key를 assistant 출력, shell history, 로그 또는 Git에 남기지 말라.
+- 생성 후 tao1의 실제 SS58 hotkey 주소를 읽어 운영 기록에 남기되 개인키는 읽지 말라.
+
+7. SN55 등록 확인
+- tao1 hotkey가 finney netuid 55에 등록됐는지 확인하라.
+- 등록돼 있다면 현재 UID와 coldkey 관계를 기록하고 중복 등록하지 말라.
+- 등록되지 않았다면 현재 등록 방법, 등록 가능 여부와 예상 소각 비용을 확인하라.
+- 비용과 명령을 사용자에게 보고하고 명시적인 승인을 받은 뒤에만 등록하라.
+- 등록 후 metagraph에서 실제 UID와 hotkey 주소가 일치하는지 다시 확인하라.
+- 과거 UID를 가정하지 말라.
+
+8. 새 단일-miner 배포 설정
+- 기존 repository의 과거 다중-lane identity를 실행하지 말라.
+- main1/tao1만 위한 명확한 PM2 manifest를 새로 만들거나 기존 manifest를 안전하게 일반화하라.
+- 설정값은 다음과 같아야 한다:
+  - wallet: main1
+  - wallet hotkey: tao1
+  - network: finney
+  - netuid: 55
+  - axon port: 8091
+  - external IP: 프롬프트 첫 줄의 IP
+  - miner process: niome-tao1
+  - bridge process: niome-seed-bridge-tao1
+  - dashboard process: niome-dashboard
+  - artifact root: repository 내부의 artifacts/miners/tao1
+- repository의 절대경로는 현재 clone 위치에서 동적으로 계산하라.
+- Python interpreter는 현재 .venv/bin/python을 사용하라.
+- hotkey 실제 SS58 주소를 NIOME_EXPLORATION_PROFILE로 사용하라.
+- 안전 제출 경로는 항상 유지하고 exploration 결과는 기존 optimizer보다 proxy 점수가 높을 때만 채택되게 하라.
+- 환경변수나 설정에 mnemonic/private key를 넣지 말라.
+
+9. dashboard 단일-lane 적용
+- dashboard의 과거 miner 목록과 hardcoded identity를 그대로 사용하지 말라.
+- 새 tao1 lane 하나만 표시하도록 환경변수 또는 단일-lane 설정을 구현하라.
+- dashboard가 다음을 보여야 한다:
+  - 현재 UID와 hotkey 축약값
+  - miner/bridge online 상태
+  - 현재 task ID
+  - 안전 제출 상태
+  - bridge stream 상태
+  - seed target과 확보된 seeds
+  - 빌드 및 PUT 상태
+  - local score
+  - official score와 rank
+  - CPU/RAM/restart count
+  - alerts와 최근 task history
+- dashboard는 read-only여야 한다.
+- restart, delete, upload, wallet 접근 endpoint를 만들지 말라.
+- request_envelope.json은 절대 읽거나 반환하지 말라.
+
+10. 로컬 validator 확인
+- repository의 local validator clone이 현재 환경에서 동작하는지 확인하라.
+- synthetic fixture로 Stage 1~5가 끝까지 실행되는지 확인하라.
+- 동일 submission과 seed에 대해 결정론적으로 같은 점수가 나오는지 테스트하라.
+- 실제 과제가 오기 전에는 fixture 외 임의의 공식 점수를 만들지 말라.
+
+11. 안전한 PM2 기동
+- 먼저 niome-seed-bridge-tao1만 시작하라.
+- bridge startup log에서 다음을 확인하라:
+  - 올바른 artifact root
+  - guide variants 설정
+  - primary Cas share
+  - exploration enabled
+- bridge가 안정적인 것을 확인한 뒤 niome-tao1 miner를 시작하라.
+- 다음을 검증하라:
+  - PM2 status online
+  - 반복 restart 없음
+  - 8091 listen
+  - miner log에 올바른 wallet/hotkey와 artifact root
+  - chain axon에 새 공인 IP와 port 8091이 표시됨
+- 그다음 dashboard를 8111에서 시작하라.
+- /api/health와 state endpoint가 새 tao1 lane만 반환하는지 확인하라.
+- 모두 정상일 때 pm2 save를 실행하고 부팅 후 PM2 복구 설정을 구성하라.
+
+12. 실제 query 전 상태 측정
+- idle CPU, RAM, swap, disk를 측정하라.
+- miner, bridge, dashboard PID를 기록하라.
+- 8091/8111 포트 소유자를 확인하라.
+- dashboard API에 URL signature나 credential이 포함되지 않았는지 검사하라.
+- 현재 chain block과 SN55 round phase를 기록하라.
+
+13. 실제 validator query 대기
+- 다음 validator query가 도착할 때까지 task를 종료하지 말고 계속 모니터링하라.
+- SN55 broadcast가 순차적일 수 있으므로 query가 즉시 오지 않는 것을 장애로 단정하지 말라.
+- 최소 한 번의 전체 broadcast 구간을 관찰하라.
+- query가 도착하면 새 task directory와 status를 확인하되 request_envelope.json 내용은 출력하지 말라.
+
+14. 실제 과제 진행 추적
+다음 항목을 순서대로 확인하라:
+- query 수신 시각
+- task ID
+- signed URL 유효시간 판단 성공
+- contract/HBB/cell-type 다운로드
+- 안전 submission 생성
+- 안전 S3 PUT 성공
+- submission row 수와 SHA-256
+- seed bridge stream 개방
+- stream별 생존/실패 상태
+- seed target block
+- 공개 seed 세 개 확보
+- hotkey-specific 후보 생성
+- 신규 valid 및 all-HDR 후보 수
+- exploration acceptance 여부
+- seed-aware build 시간
+- 최종 PUT HTTP 성공
+- 최종 submission SHA-256
+- local Stage 1~5 score
+- peak CPU/RAM/swap
+- protocol timing 여유
+
+15. 장애 처리
+- 안전 제출 전에는 miner를 재시작하지 말라.
+- bridge가 active 상태일 때 bridge를 재시작하지 말라.
+- 장애가 발생하면 안전 제출이 S3에 남았는지 먼저 확인하라.
+- stream 일부가 실패해도 생존 stream이 있다면 작업을 계속하라.
+- 모든 stream이 실패했으면 안전 제출을 보존하고 실패 원인을 기록하라.
+- 재시작은 최신 task가 complete 또는 failed인 안전 구간에서 대상 프로세스만 수행하라.
+
+16. 공식 점수 대기
+- validation block 이후 공식 score API 게시를 계속 확인하라.
+- 공식 점수가 지연돼도 local score를 official score로 표현하지 말라.
+- official score가 게시되면 다음을 기록하라:
+  - task ID
+  - local score
+  - official score
+  - 두 점수의 차이
+  - official rank
+  - participants
+  - weighted total
+  - consistency factor
+  - distribution fidelity
+  - 공식 게시 시각
+- local과 official이 다르면 완료로 처리하지 말고 scoring artifact와 seed를 재검증하라.
+
+17. Git 정리
+- 새 VPS에서 필요한 일반화된 PM2/dashboard 설정과 문서 변경은 테스트 후 Git에 커밋할 수 있다.
+- IP, UID처럼 공개 운영값을 문서화할 때도 필요 최소한만 포함하라.
+- wallet, mnemonic, private key, artifacts, signed URLs, .env, logs, data 파일은 절대 커밋하지 말라.
+- push 전 staged snapshot을 secret scan하고 대용량 blob을 검사하라.
+- 원격 push는 사용자가 지정한 저장소와 branch만 대상으로 하라.
+
+완료 조건:
+다음 조건이 전부 충족돼야 작업을 완료했다고 보고하라.
+
+- Python/uv 개발환경 구축
+- chromosome 11 데이터 준비
+- 전체 테스트 통과
+- main1/tao1 wallet 준비
+- tao1의 실제 SS58 주소 확인
+- SN55 등록과 현재 UID 확인
+- chain axon에 새 IP:8091 serving 확인
+- niome-tao1 online
+- niome-seed-bridge-tao1 online
+- niome-dashboard online
+- 실제 validator query 수신
+- 안전 제출 성공
+- 공개 seed 확보
+- seed-aware exploration 실행
+- 최종 PUT 성공
+- local validation 성공
+- official score와 rank 게시 확인
+- local/official 점수 대조 완료
+- CPU/RAM/swap 및 timing 여유 검증
+- credential 또는 signed URL 노출 0건
+
+진행 중에는 중요한 상태 변화마다 간결한 업데이트를 제공하라. 장시간 query나 official score를 기다릴 때도 작업을 끝내지 말고 chain phase와 task 상태를 주기적으로 확인하라.
+
+최종 보고서는 다음 표를 포함해야 한다:
+- 시스템과 설치 버전
+- wallet/hotkey/현재 UID
+- 공인 IP와 axon port
+- PM2 process/PID/status/restart count
+- task ID와 수신 시각
+- 안전 제출과 bridge PUT 결과
+- seed와 후보 수
+- local/official 점수와 rank
+- CPU/RAM/swap peak
+- deadline 여유
+- 발생한 문제와 복구 조치
+- 남은 운영 위험
