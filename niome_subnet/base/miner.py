@@ -34,6 +34,45 @@ from typing import Union
 
 logger = logging.getLogger(__name__)
 
+# Validator requests can be delayed by the subnet's sequential broadcast path
+# and its proxy. Keep the window bounded by the 300-second submission URL TTL,
+# while retaining accepted nonces longer than the whole freshness window.
+FORWARD_AUTH_MAX_AGE = 300.0
+FORWARD_AUTH_ALLOWED_SKEW = 30.0
+FORWARD_AUTH_NONCE_STORE = bt.http_auth.InMemoryNonceStore(retention=360.0)
+
+
+def verify_forward_request(
+    headers,
+    body: bytes,
+    *,
+    self_hotkey_ss58: str,
+):
+    """Verify a validator request with v11 and legacy-v11 compatibility.
+
+    Bittensor 11 requires receiver-bound signatures by default, but the
+    subnet's current validator signs /forward requests without receiver_ss58.
+    Keep strict receiver binding whenever the header is present and only use
+    the unbound verifier for the legacy request shape. Signature, nonce, and
+    request-age validation are still performed by bittensor in both modes.
+    """
+    has_receiver = any(
+        str(name).lower() == "x-bittensor-receiver" for name in headers
+    )
+    auth_mode = "receiver-bound" if has_receiver else "legacy-unbound"
+    caller = bt.http_auth.verify(
+        headers,
+        body,
+        method="POST",
+        path="/forward",
+        self_hotkey_ss58=self_hotkey_ss58,
+        max_age=FORWARD_AUTH_MAX_AGE,
+        allowed_skew=FORWARD_AUTH_ALLOWED_SKEW,
+        require_receiver=has_receiver,
+        nonce_store=FORWARD_AUTH_NONCE_STORE,
+    )
+    return caller, auth_mode
+
 
 class BaseMinerNeuron(BaseNeuron):
     """
@@ -51,6 +90,12 @@ class BaseMinerNeuron(BaseNeuron):
             type=int,
             help="Port for the miner HTTP server.",
             default=8091,
+        )
+        parser.add_argument(
+            "--axon.external-ip",
+            type=str,
+            default=None,
+            help="Public IP advertised on-chain; defaults to hostname resolution.",
         )
 
     def __init__(self, config=None):
@@ -90,20 +135,48 @@ class BaseMinerNeuron(BaseNeuron):
 
                 # Verify hotkey-signed request
                 try:
-                    caller = bt.http_auth.verify(
+                    caller, auth_mode = verify_forward_request(
                         headers,
                         body,
-                        method="POST",
-                        path="/forward",
                         self_hotkey_ss58=miner.wallet.hotkey.ss58_address,
                     )
                 except bt.http_auth.AuthError as e:
+                    client = request.client.host if request.client else "unknown"
+                    nonce_age = "unknown"
+                    raw_nonce = next(
+                        (
+                            value
+                            for name, value in headers.items()
+                            if str(name).lower() == "x-bittensor-nonce"
+                        ),
+                        None,
+                    )
+                    if raw_nonce is not None:
+                        try:
+                            nonce_age = f"{(time.time_ns() - int(raw_nonce)) / 1e9:.3f}s"
+                        except (TypeError, ValueError):
+                            pass
+                    logger.warning(
+                        "Rejected /forward authentication from %s (nonce_age=%s): %s",
+                        client,
+                        nonce_age,
+                        e,
+                    )
                     raise HTTPException(status_code=401, detail=str(e))
 
                 # Run blacklist check
                 if await miner.blacklist(caller.hotkey_ss58):
+                    logger.warning(
+                        "Rejected blacklisted /forward caller %s",
+                        caller.hotkey_ss58,
+                    )
                     raise HTTPException(status_code=403, detail="blacklisted")
 
+                logger.info(
+                    "Accepted /forward caller %s using %s authentication",
+                    caller.hotkey_ss58,
+                    auth_mode,
+                )
                 return await miner.forward(body, caller.hotkey_ss58)
             except HTTPException:
                 raise
@@ -115,7 +188,7 @@ class BaseMinerNeuron(BaseNeuron):
         """Register this miner's IP:port on chain."""
         try:
             import socket
-            ip = socket.gethostbyname(socket.gethostname())
+            ip = self.config.axon.external_ip or socket.gethostbyname(socket.gethostname())
             self.subtensor.execute(
                 bt.ServeAxon(
                     netuid=self.config.netuid,
@@ -155,22 +228,19 @@ class BaseMinerNeuron(BaseNeuron):
         server_thread.start()
 
         # This loop maintains the miner's operations until intentionally stopped.
+        last_sync_block = self.block
         try:
             while not self.should_exit:
                 try:
-                    neuron = self.metagraph.neurons[self.uid]
-                    while (
-                        self.block - neuron.last_update
-                        < self.config.neuron.epoch_length
-                    ):
+                    while self.block - last_sync_block < self.config.neuron.epoch_length:
                         time.sleep(1)
                         if self.should_exit:
                             break
-                        # refresh neuron for updated last_update
-                        neuron = self.metagraph.neurons[self.uid]
 
-                    # Sync metagraph and potentially set weights.
-                    self.sync()
+                    # Miners do not set weights. Refresh on a bounded cadence
+                    # rather than spinning when the chain last_update is old.
+                    self.resync_metagraph()
+                    last_sync_block = self.block
                     self.step += 1
 
                 except Exception as err:

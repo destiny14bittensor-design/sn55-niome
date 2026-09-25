@@ -61,12 +61,9 @@ class BaseNeuron(ABC):
         return ttl_get_block(self)
 
     def __init__(self, config=None):
-        base_config = copy.deepcopy(config or BaseNeuron.config())
-        self.config = self.config()
-        # Merge any extra attrs from base_config into self.config
-        for key, val in vars(base_config).items():
-            if not hasattr(self.config, key):
-                setattr(self.config, key, val)
+        # Parse through the concrete subclass so miner/validator-specific CLI
+        # arguments are accepted. Parsing through BaseNeuron discarded them.
+        self.config = copy.deepcopy(config or self.config())
         self.check_config(self.config)
 
         logging.basicConfig(

@@ -100,6 +100,26 @@ We systematically update validation models in response to emerging academic rese
 - [Miner Setup](docs/miner_guide.md)
 - [Validator Setup](docs/validator_guide.md)
 
+## Production miner extensions
+
+This fork includes the complete SN55 miner operations work used by the four
+isolated `dollar1`-`dollar4` lanes:
+
+- deadline-safe task capture and local validation;
+- a seed-aware slow-PUT bridge with safe baseline fallback;
+- deterministic candidate optimization and hotkey-specific exploration;
+- an exact public-code-compatible local validator clone;
+- a read-only four-miner Fleet Dashboard;
+- PM2 deployment definitions, reliability tests, and replay records.
+
+Start with the [four-miner operations runbook](docs/four_miner_operations.md),
+the [optimizer architecture](docs/seed_aware_optimizer_architecture.md), and
+the [dashboard guide](dashboard/README.md).
+
+Runtime task artifacts, signed upload envelopes, chromosome data, wallets,
+credentials, and logs are intentionally excluded from Git. See
+[SECURITY.md](SECURITY.md) before publishing operational changes.
+
 ## Community
 
 For real-time discussions, community support, and regular updates, <a href="https://discord.com/invite/bittensor">join the bittensor discord</a>. Connect with developers, researchers, and users to get the most out of the NIOME Subnet.

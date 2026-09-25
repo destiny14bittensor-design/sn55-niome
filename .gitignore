@@ -121,6 +121,19 @@ celerybeat.pid
 
 # Environments
 .env
+
+# SN55 miner runtime state and credentials
+artifacts/
+runtime/
+.bittensor/
+wallets/
+*.pid
+*.sock
+*.local
+.env.*
+!.env.example
+**/request_envelope.json
+LIVE_MINER_STATUS.md
 .venv
 env/
 venv/

@@ -1,0 +1,132 @@
+# SN55 four-miner operations
+
+This runbook describes the checked-in production layout. Runtime artifacts,
+wallet files, environment secrets, logs, and presigned URLs are deliberately
+excluded from Git.
+
+## Process layout
+
+| Lane | UID | Axon | PM2 miner | PM2 bridge | Builder profile | Artifact root |
+|---|---:|---:|---|---|---|---|
+| dollar1 | 80 | 8091 | `niome-dollar1` | `niome-seed-bridge` | baseline | `artifacts/live` |
+| dollar2 | 243 | 8092 | `niome-dollar2` | `niome-seed-bridge-dollar2` | exploration | `artifacts/miners/dollar2` |
+| dollar3 | 45 | 8093 | `niome-dollar3` | `niome-seed-bridge-dollar3` | exploration | `artifacts/miners/dollar3` |
+| dollar4 | 198 | 8094 | `niome-dollar4` | `niome-seed-bridge-dollar4` | exploration | `artifacts/miners/dollar4` |
+
+The read-only Fleet Dashboard is `niome-dashboard` on port `8111`. It reads
+all four roots directly. Ports 8112-8114 are obsolete and must remain stopped.
+
+Each lane has an isolated artifact root. Identical network task IDs are safe
+because no writable task directory is shared between lanes.
+
+## Prerequisites
+
+- Python 3.12 and `uv`
+- Node.js and PM2
+- four registered hotkeys named `dollar1` through `dollar4` in wallet `main`
+- TCP ports 8091-8094 reachable from validators
+- enough memory for four simultaneous builders
+
+Wallet material lives under the operator's Bittensor wallet directory and must
+never be copied into this repository.
+
+## Install
+
+```bash
+git clone https://github.com/destiny14bittensor-design/sn55-niome.git
+cd sn55-niome
+uv sync --frozen
+mkdir -p data
+wget -O data/chr11.fa.gz \
+  https://ftp.ensembl.org/pub/release-116/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.chromosome.11.fa.gz
+gunzip data/chr11.fa.gz
+```
+
+Set the public axon IP before starting a miner on a different host:
+
+```bash
+export NIOME_EXTERNAL_IP="203.0.113.10"
+```
+
+The deployment manifest defaults to the current production IP when this
+variable is absent. Review `tools/ecosystem.fleet.config.js` before deployment.
+
+## Safe startup
+
+Start bridges first. They only watch isolated roots and cannot accept validator
+requests by themselves.
+
+```bash
+pm2 start tools/ecosystem.fleet.config.js --only \
+  niome-seed-bridge,niome-seed-bridge-dollar2,niome-seed-bridge-dollar3,niome-seed-bridge-dollar4
+```
+
+Start miners only after confirming no existing lane has an active bridge state
+(`opening`, `streaming`, `waiting_for_seeds`, `building`, or
+`finishing_upload`). Add lanes one at a time and verify the port after each:
+
+```bash
+pm2 start tools/ecosystem.fleet.config.js --only niome-dollar1
+pm2 start tools/ecosystem.fleet.config.js --only niome-dollar2
+pm2 start tools/ecosystem.fleet.config.js --only niome-dollar3
+pm2 start tools/ecosystem.fleet.config.js --only niome-dollar4
+ss -ltnp | grep -E ':(8091|8092|8093|8094)\\b'
+```
+
+Start the one central dashboard, then persist the PM2 process list:
+
+```bash
+pm2 start tools/ecosystem.fleet.config.js --only niome-dashboard
+curl -fsS http://127.0.0.1:8111/api/health
+pm2 save
+```
+
+## Submission paths
+
+The ordinary miner immediately builds and uploads a deadline-safe result. The
+bridge opens several bounded PUT streams while the signed URL is valid, waits
+for public seed blocks, builds a seed-aware result, and completes a surviving
+stream. S3 object replacement is atomic, so a bridge failure leaves the safe
+submission available.
+
+`dollar1` is the stable baseline. The other three lanes add deterministic,
+hotkey-specific candidate reservoirs and accept an exploratory result only
+when its exact proxy score exceeds the ordinary optimizer result.
+
+## Verification
+
+```bash
+pm2 status
+pm2 logs niome-seed-bridge-dollar2 --lines 20 --nostream
+curl -fsS http://127.0.0.1:8111/api/fleet/state
+uv run pytest -q
+```
+
+For a completed task, verify safe upload, bridge HTTP status, local score,
+official score, SHA-256, CPU, and RAM in the dashboard. Score deltas are valid
+only when the task IDs match.
+
+## Safe restart and rollback
+
+Never restart a miner or bridge during an active bridge state. Wait until the
+latest task is `complete` or `failed`, then restart only the intended PM2 name.
+To remove one exploratory lane without affecting the others:
+
+```bash
+pm2 stop niome-dollar4 niome-seed-bridge-dollar4
+pm2 save
+```
+
+Do not delete its artifact root until diagnosis is finished. Never use a broad
+recursive delete or a fleet-wide restart during a broadcast window.
+
+## Files intentionally not versioned
+
+- `artifacts/`: task payloads, submissions, diagnostics, and signed envelopes
+- `data/`: large chromosome and validator working data
+- `.env*` except `.env.example`
+- Bittensor wallets and hotkey files
+- PM2 logs, process state, caches, and live PID reports
+
+The dashboard API never reads `request_envelope.json`, so signed URLs cannot be
+returned to browsers.

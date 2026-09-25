@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>NIOME Fleet Control</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+</head>
+<body>
+  <div class="aurora aurora-one"></div>
+  <div class="aurora aurora-two"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <p class="eyebrow">SUBNET 55 · FOUR ISOLATED LANES</p>
+          <h1>NIOME Fleet Control</h1>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="notify-button" class="ghost-button" type="button">브라우저 알림 켜기</button>
+        <div id="connection-pill" class="connection-pill waiting">
+          <span class="pulse-dot"></span><span id="connection-text">연결 중</span>
+        </div>
+      </div>
+    </header>
+
+    <section id="critical-banner" class="critical-banner hidden" aria-live="assertive">
+      <span class="critical-icon">!</span>
+      <div><strong id="critical-title">Fleet 경보</strong><p id="critical-detail"></p></div>
+    </section>
+
+    <section class="fleet-hero panel">
+      <div class="fleet-primary">
+        <div class="hero-status-row">
+          <span id="overall-badge" class="badge healthy">상태 확인 중</span>
+          <span id="coverage-label" class="stage-label">과제 수신 범위 확인 중</span>
+        </div>
+        <p class="task-label">현재 비교 과제</p>
+        <h2 id="active-task">작업을 기다리고 있습니다</h2>
+        <p class="subtle">점수 차는 같은 task_id의 결과끼리만 계산합니다.</p>
+      </div>
+      <div class="fleet-kpis">
+        <div><span>온라인</span><strong id="online-count">—</strong></div>
+        <div><span>기준 점수</span><strong id="baseline-score">—</strong></div>
+        <div><span>현재 블록</span><strong id="current-block">—</strong></div>
+        <div><span>라운드 단계</span><strong id="round-phase">—</strong></div>
+        <div><span>데이터 갱신</span><strong id="freshness">—</strong></div>
+      </div>
+    </section>
+
+    <section class="section-heading">
+      <div><p class="eyebrow">FLEET OVERVIEW</p><h2>4개 마이너 상태</h2></div>
+      <p>카드를 누르면 아래 상세 화면이 해당 마이너로 전환됩니다.</p>
+    </section>
+    <section id="miner-grid" class="miner-grid" aria-label="마이너 상태 카드"></section>
+
+    <section class="panel comparison-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">SAME-TASK COMPARISON</p><h3>동일 과제 결과 비교</h3></div>
+        <span id="comparison-task" class="mini-badge">작업 대기</span>
+      </div>
+      <div class="table-wrap">
+        <table class="comparison-table">
+          <thead><tr><th>마이너</th><th>UID</th><th>단계</th><th>안전 제출</th><th>브리지</th><th>최종 PUT</th><th>로컬</th><th>공식 / 순위</th><th>기준 대비</th><th>CPU</th><th>RAM</th></tr></thead>
+          <tbody id="comparison-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section-heading detail-heading">
+      <div><p class="eyebrow">SELECTED LANE</p><h2><span id="detail-label">dollar1</span> 상세</h2></div>
+      <div class="detail-identity"><span id="detail-profile">baseline</span><code id="detail-hotkey">—</code></div>
+    </section>
+
+    <section class="lanes">
+      <article class="lane panel">
+        <div class="lane-title"><span class="lane-index">A</span><div><h3>안전 제출 경로</h3><p>수신 즉시 기본 결과를 확보하는 경로</p></div></div>
+        <div id="safe-steps" class="steps"></div>
+      </article>
+      <article class="lane panel accent-panel">
+        <div class="lane-title"><span class="lane-index">B</span><div><h3>시드 기반 개선 경로</h3><p>시드 수신부터 공식 채점까지의 경로</p></div></div>
+        <div id="bridge-steps" class="steps bridge-steps"></div>
+      </article>
+    </section>
+
+    <section class="metric-grid">
+      <article class="metric panel"><p>로컬 점수</p><strong id="local-score">—</strong><span id="local-source">채점 대기</span></article>
+      <article class="metric panel"><p>공식 점수 / 순위</p><strong id="official-score">—</strong><span id="official-rank">공식 검증 전</span></article>
+      <article class="metric panel"><p>dollar1 기준 대비</p><strong id="score-delta">—</strong><span id="delta-source">동일 과제만 비교</span></article>
+      <article class="metric panel"><p>일관성</p><strong id="consistency-score">—</strong><span>공식 우선 · 로컬 보조</span></article>
+    </section>
+
+    <section class="content-grid">
+      <article class="panel span-7">
+        <div class="panel-heading">
+          <div><p class="eyebrow">S3 BRIDGE</p><h3>스트림 생존 상태</h3></div>
+          <span id="stream-summary" class="mini-badge">—</span>
+        </div>
+        <div id="stream-grid" class="stream-grid"><p class="empty">스트림 정보를 기다리고 있습니다.</p></div>
+      </article>
+      <article class="panel span-5">
+        <div class="panel-heading"><div><p class="eyebrow">RUNTIME</p><h3>프로세스와 자원</h3></div></div>
+        <div id="process-list" class="process-list"></div>
+        <div class="resource-strip">
+          <div><span>합산 CPU</span><strong id="resource-cpu">—</strong></div>
+          <div><span>합산 RAM</span><strong id="resource-ram">—</strong></div>
+          <div><span>재시작</span><strong id="resource-restarts">—</strong></div>
+        </div>
+      </article>
+      <article class="panel span-7">
+        <div class="panel-heading">
+          <div><p class="eyebrow">ALERTS</p><h3>운영 판단</h3></div>
+          <span id="alert-count" class="mini-badge">0</span>
+        </div>
+        <div id="alert-list" class="alert-list"></div>
+      </article>
+      <article class="panel span-5 quality-panel">
+        <div class="panel-heading"><div><p class="eyebrow">SCORE QUALITY</p><h3>점수 구성</h3></div></div>
+        <div class="quality-list">
+          <div><span>Weighted</span><strong id="weighted-score">—</strong></div>
+          <div><span>Fidelity</span><strong id="fidelity-score">—</strong></div>
+          <div><span>유효 실험</span><strong id="valid-experiments">—</strong></div>
+          <div><span>제출 SHA</span><code id="submission-sha">—</code></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel history-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">SELECTED HISTORY</p><h3>선택 마이너 최근 라운드</h3></div>
+        <span class="read-only">읽기 전용</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>수신</th><th>작업</th><th>안전 제출</th><th>브리지</th><th>시드</th><th>로컬 점수</th><th>공식</th></tr></thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <span>읽기 전용 · 네 마이너의 실행과 아티팩트를 변경하지 않습니다.</span>
+      <span id="footer-generated">—</span>
+    </footer>
+  </main>
+  <script src="/assets/dashboard.js" defer></script>
+</body>
+</html>
