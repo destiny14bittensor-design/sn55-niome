@@ -17,13 +17,15 @@ def sample(task_id: str, normalized_top: float) -> ConsistencySample:
     )
 
 
-def test_insufficient_history_fails_back_to_maximum_score():
+def test_insufficient_history_uses_cold_start_ceiling():
     decision = decide_consistency_target(
         [sample("a", 0.68), sample("b", 0.70)]
     )
 
-    assert decision.mode == "max-score"
-    assert decision.target_consistency is None
+    assert decision.mode == "cold-start"
+    assert decision.target_consistency == pytest.approx(0.85)
+    assert decision.targeting_enabled is True
+    assert decision.cold_start is True
     assert "at least 3" in decision.reason
 
 
@@ -47,7 +49,7 @@ def test_target_uses_normalized_quantile_and_safety_margin():
     )
 
 
-def test_unsafe_or_impossible_target_fails_back_to_maximum_score():
+def test_out_of_band_history_is_clamped_instead_of_selecting_one():
     too_high = decide_consistency_target(
         [sample("a", 0.90), sample("b", 0.92), sample("c", 0.94)]
     )
@@ -55,10 +57,12 @@ def test_unsafe_or_impossible_target_fails_back_to_maximum_score():
         [sample("a", 0.40), sample("b", 0.42), sample("c", 0.44)]
     )
 
-    assert too_high.mode == "max-score"
+    assert too_high.mode == "targeted"
     assert too_high.required_consistency > 0.85
-    assert too_low.mode == "max-score"
+    assert too_high.target_consistency == pytest.approx(0.85)
+    assert too_low.mode == "targeted"
     assert too_low.required_consistency < 0.60
+    assert too_low.target_consistency == pytest.approx(0.60)
 
 
 def test_full_hdr_share_is_clamped_at_both_anchors():

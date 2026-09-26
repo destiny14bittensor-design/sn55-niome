@@ -31,9 +31,12 @@ non-placeholder contract seed. Consistency history now accepts only completed
 official scoreboard and whose seed-authority epoch is
 `late-contract-random-v1`. The epoch prevents older contract or chain rollout
 samples from contaminating the new regime. Fewer than three such rounds
-intentionally select the consistency-`1.0` exact-seed fallback; after three
-rounds, the existing history-derived target (currently expected near the
-leaders' `0.81..0.84` range) may activate.
+use a cold-start target of `0.85`, not the consistency-`1.0` fallback. The
+bridge exact-replays managed candidates, rejects the maximum-score candidate,
+and will leave the safe object untouched if it cannot verify a managed result
+below the cold-start ceiling. After three rounds, the existing history-derived
+target may activate; out-of-band estimates are clamped to `0.60..0.85` instead
+of jumping to `1.0`.
 
 ## 2026-09-26 verified chain-seed cutover
 

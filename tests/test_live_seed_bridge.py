@@ -94,6 +94,54 @@ def test_exact_consistency_search_selects_closest_candidate_above_target(
     assert diagnostics["fallback_used"] is False
 
 
+def test_cold_start_exact_search_never_selects_consistency_one(monkeypatch):
+    class Result:
+        def __init__(self, consistency):
+            self.final_score = 250.0 * consistency
+            self.breakdown = {
+                "consistency_factor": consistency,
+                "total_weighted_score": 250.0,
+                "distribution_fidelity_factor": 1.0,
+            }
+
+    class Artifacts:
+        contract = {"seed": "old"}
+
+    achieved = {"max": 1.0, "low": 0.72, "near": 0.84, "high": 0.88}
+
+    def fake_evaluate(candidate, _artifacts, raw_submission_bytes):
+        assert raw_submission_bytes
+        return Result(achieved[candidate[0]["experiment_id"]])
+
+    monkeypatch.setattr(bridge_module, "evaluate_submission", fake_evaluate)
+    monkeypatch.setattr(
+        bridge_module,
+        "replace",
+        lambda artifacts, contract: Artifacts(),
+    )
+    candidates = [
+        ("managed-low", [{"experiment_id": "low"}]),
+        ("managed-near", [{"experiment_id": "near"}]),
+        ("managed-high", [{"experiment_id": "high"}]),
+        ("max-score-fallback", [{"experiment_id": "max"}]),
+    ]
+
+    selected, diagnostics = _choose_exact_consistency_candidate(
+        candidates=candidates,
+        artifacts=Artifacts(),
+        seeds=[1, 2, 3],
+        target_consistency=0.85,
+        allow_max_score_fallback=False,
+        maximum_consistency=0.90,
+    )
+
+    assert selected[0]["experiment_id"] == "high"
+    assert diagnostics["selected_label"] == "managed-high"
+    assert diagnostics["selected"]["consistency_factor"] == pytest.approx(0.88)
+    assert diagnostics["fallback_used"] is False
+    assert diagnostics["target_met"] is True
+
+
 def test_fetch_refreshed_contract_uses_task_url_without_persisting_it(
     tmp_path, monkeypatch
 ):

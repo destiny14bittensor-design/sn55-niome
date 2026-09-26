@@ -59,12 +59,17 @@ class ConsistencyDecision:
 
     @property
     def targeting_enabled(self) -> bool:
-        return self.mode == "targeted"
+        return self.mode in {"cold-start", "targeted"}
+
+    @property
+    def cold_start(self) -> bool:
+        return self.mode == "cold-start"
 
     def as_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value["normalized_top_scores"] = list(self.normalized_top_scores)
         value["targeting_enabled"] = self.targeting_enabled
+        value["cold_start"] = self.cold_start
         return value
 
 
@@ -162,31 +167,39 @@ def decide_consistency_target(
     if not enabled:
         return maximum("consistency control is disabled")
     if len(valid) < min_samples:
-        return maximum(
-            f"need at least {min_samples} comparable completed rounds; have {len(valid)}"
+        return ConsistencyDecision(
+            mode="cold-start",
+            reason=(
+                f"need at least {min_samples} comparable completed rounds; "
+                f"have {len(valid)}; using the conservative targeting ceiling"
+            ),
+            sample_count=len(valid),
+            required_consistency=None,
+            target_consistency=max_target,
+            safety_margin=safety_margin,
+            quantile=quantile,
+            normalized_top_scores=ratios,
+            all_seed_hdr_share=all_seed_hdr_share_for_target(max_target),
         )
 
     required = _linear_quantile(list(ratios), quantile) * (1.0 + safety_margin)
     if not math.isfinite(required):
         return maximum("historical target is not finite")
     if required < min_target:
-        return maximum(
-            "required factor is below the configured manipulation floor",
-            required,
-        )
-    if required > max_target:
-        return maximum(
-            "required factor exceeds the safe targeting ceiling",
-            required,
-        )
-
-    target = max(min_target, min(max_target, required))
-    return ConsistencyDecision(
-        mode="targeted",
-        reason=(
+        target = min_target
+        reason = "historical requirement is below the targeting floor; clamped upward"
+    elif required > max_target:
+        target = max_target
+        reason = "historical requirement exceeds the targeting ceiling; clamped downward"
+    else:
+        target = required
+        reason = (
             "history-normalized winning threshold plus safety margin is inside "
             "the configured targeting band"
-        ),
+        )
+    return ConsistencyDecision(
+        mode="targeted",
+        reason=reason,
         sample_count=len(valid),
         required_consistency=required,
         target_consistency=target,

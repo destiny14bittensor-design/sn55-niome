@@ -6,7 +6,8 @@
 > `contract_url`을 polling하여 `seed: 0`이 실제 seed로 바뀐 뒤에만 최적화 PUT을
 > 완성하며, consistency history는 `contract-authoritative` exact-match 라운드만
 > 인정한다. 상세 근거는 `docs/seed_transition_architecture.md`의 최신 최상단 절을
-> 따른다.
+> 따른다. 또한 새 epoch 표본이 3개 미만이면 consistency `1.0`이 아니라 cold-start
+> target `0.85`를 사용하며, exact replay된 managed 후보만 허용한다.
 
 ## 1. 목적과 현재 결론
 

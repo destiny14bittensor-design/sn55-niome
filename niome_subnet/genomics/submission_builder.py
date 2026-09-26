@@ -1039,8 +1039,9 @@ def build_submission(
         # Exact replay shows a steep transition near the all-HDR end: even an
         # 80% full-HDR mixture remained near the two-seed ~0.71 anchor.  Probe
         # that transition densely; the exact selector evaluates the highest
-        # shares first and retains the pure all-HDR fallback.
-        for full_share in (0.0, 0.80, 0.85, 0.90, 0.95):
+        # shares first. The pure all-HDR fallback is retained for established
+        # history, while cold-start policy explicitly excludes it.
+        for full_share in (0.0, 0.80, 0.85, 0.90, 0.95, 0.96, 0.97, 0.98, 0.99):
             candidate, candidate_mix = select_initial_submission(
                 managed_consistency_target,
                 full_share_override=full_share,

@@ -75,6 +75,7 @@ CONSISTENCY_SCORE_TIMEOUT_SECONDS = 10.0
 CONSISTENCY_REPLAY_BUDGET_SECONDS = 45.0
 CONSISTENCY_UPLOAD_RESERVE_SECONDS = 75.0
 CONSISTENCY_MIN_REPLAY_SECONDS = 30.0
+COLD_START_MAX_EXACT_CONSISTENCY = 0.90
 SEED_AUTHORITY_EPOCH = "late-contract-random-v1"
 POLL_SECONDS = 2.0
 CONTRACT_POLL_SECONDS = 6.0
@@ -355,8 +356,10 @@ def _choose_exact_consistency_candidate(
     seeds: list[int],
     target_consistency: float,
     budget_seconds: float = CONSISTENCY_REPLAY_BUDGET_SECONDS,
+    allow_max_score_fallback: bool = True,
+    maximum_consistency: float | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Replay a bounded candidate frontier and never select below target."""
+    """Replay a bounded frontier under the decision's target and ceiling."""
     if not candidates:
         raise ValueError("exact consistency search requires candidates")
     scoring_contract = dict(artifacts.contract)
@@ -367,11 +370,16 @@ def _choose_exact_consistency_candidate(
     def replay_priority(item: tuple[str, list[dict[str, Any]]]) -> tuple[int, int, str]:
         label = item[0]
         if label == "max-score-fallback":
-            return (0, 0, label)
+            return ((0 if allow_max_score_fallback else 2), 0, label)
         try:
             percent = int(label.rsplit("-", 1)[-1].removesuffix("pct"))
         except ValueError:
             percent = 0
+        if not allow_max_score_fallback:
+            # The measured Stage-4 response changes steeply near the full-HDR
+            # endpoint. Probe the middle of that transition first so even a
+            # one-replay deadline has a useful non-1.0 candidate.
+            return (0, abs(percent - 97), label)
         # After establishing the safety fallback, probe the high-consistency
         # end first.  The 45-second live budget normally fits two more
         # exact RF replays.
@@ -415,8 +423,13 @@ def _choose_exact_consistency_candidate(
     eligible = [
         item
         for item in evaluated
+        if allow_max_score_fallback or item.get("label") != "max-score-fallback"
         if isinstance(item.get("consistency_factor"), (int, float))
         and float(item["consistency_factor"]) + 1e-12 >= target_consistency
+        and (
+            maximum_consistency is None
+            or float(item["consistency_factor"]) <= maximum_consistency + 1e-12
+        )
     ]
     if eligible:
         chosen = min(
@@ -428,6 +441,32 @@ def _choose_exact_consistency_candidate(
             ),
         )
         fallback_used = chosen["label"] == "max-score-fallback"
+        target_met = True
+    elif not allow_max_score_fallback:
+        managed = [
+            item
+            for item in evaluated
+            if item.get("label") != "max-score-fallback"
+            and isinstance(item.get("consistency_factor"), (int, float))
+            and (
+                maximum_consistency is None
+                or float(item["consistency_factor"]) <= maximum_consistency + 1e-12
+            )
+        ]
+        if not managed:
+            raise RuntimeError(
+                "cold-start exact frontier had no candidate below its consistency ceiling"
+            )
+        chosen = min(
+            managed,
+            key=lambda item: (
+                abs(float(item["consistency_factor"]) - target_consistency),
+                -float(item["final_score"]),
+                item["label"],
+            ),
+        )
+        fallback_used = False
+        target_met = False
     else:
         chosen = next(
             (
@@ -442,6 +481,7 @@ def _choose_exact_consistency_candidate(
                 "exact consistency frontier had no target-safe or maximum-score result"
             )
         fallback_used = True
+        target_met = False
     return submissions_by_label[chosen["label"]], {
         "enabled": True,
         "target_consistency": target_consistency,
@@ -452,6 +492,8 @@ def _choose_exact_consistency_candidate(
         "deadline_reached": len(evaluated) < len(candidates),
         "selected_label": chosen["label"],
         "fallback_used": fallback_used,
+        "target_met": target_met,
+        "maximum_consistency": maximum_consistency,
         "selected": chosen,
         "results": evaluated,
     }
@@ -1080,7 +1122,10 @@ def _handle_envelope(envelope_path: Path) -> None:
                     - CONSISTENCY_UPLOAD_RESERVE_SECONDS,
                 ),
             )
-            if replay_budget < CONSISTENCY_MIN_REPLAY_SECONDS:
+            if (
+                replay_budget < CONSISTENCY_MIN_REPLAY_SECONDS
+                and not consistency_decision.cold_start
+            ):
                 fallback = next(
                     candidate
                     for label, candidate in consistency_candidates
@@ -1111,6 +1156,12 @@ def _handle_envelope(envelope_path: Path) -> None:
                         consistency_decision.target_consistency
                     ),
                     budget_seconds=replay_budget,
+                    allow_max_score_fallback=not consistency_decision.cold_start,
+                    maximum_consistency=(
+                        COLD_START_MAX_EXACT_CONSISTENCY
+                        if consistency_decision.cold_start
+                        else None
+                    ),
                 )
             diagnostics["exact_consistency_search"] = exact_search
             consistency_control["exact_search"] = exact_search
