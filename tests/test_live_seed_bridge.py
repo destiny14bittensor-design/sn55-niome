@@ -27,6 +27,7 @@ from tools.live_seed_bridge import (
 def test_consistency_history_accepts_only_contract_authoritative_exact_replay():
     payload = {
         "comparable_to_official": True,
+        "seed_authority_epoch": bridge_module.SEED_AUTHORITY_EPOCH,
         "seed_policy": {"mode": "contract-authoritative"},
         "breakdown": {
             "total_weighted_score": 300.0,
@@ -41,6 +42,10 @@ def test_consistency_history_accepts_only_contract_authoritative_exact_replay():
     assert accepted.normalized_top == pytest.approx(0.70)
 
     payload["seed_policy"]["mode"] = "chain-authoritative"
+    assert _consistency_sample_from_payload("task", payload, 189.0) is None
+
+    payload["seed_policy"]["mode"] = "contract-authoritative"
+    payload.pop("seed_authority_epoch")
     assert _consistency_sample_from_payload("task", payload, 189.0) is None
 
 

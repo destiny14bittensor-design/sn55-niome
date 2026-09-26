@@ -28,10 +28,12 @@ The live bridge therefore follows the legacy late-contract lifecycle again:
 Block-derived seeds are never officially comparable and never override a
 non-placeholder contract seed. Consistency history now accepts only completed
 `contract-authoritative` rounds whose local score appears exactly in the
-official scoreboard. Fewer than three such rounds intentionally select the
-consistency-`1.0` exact-seed fallback; after three rounds, the existing
-history-derived target (currently expected near the leaders' `0.81..0.84`
-range) may activate.
+official scoreboard and whose seed-authority epoch is
+`late-contract-random-v1`. The epoch prevents older contract or chain rollout
+samples from contaminating the new regime. Fewer than three such rounds
+intentionally select the consistency-`1.0` exact-seed fallback; after three
+rounds, the existing history-derived target (currently expected near the
+leaders' `0.81..0.84` range) may activate.
 
 ## 2026-09-26 verified chain-seed cutover
 

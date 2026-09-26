@@ -75,6 +75,7 @@ CONSISTENCY_SCORE_TIMEOUT_SECONDS = 10.0
 CONSISTENCY_REPLAY_BUDGET_SECONDS = 45.0
 CONSISTENCY_UPLOAD_RESERVE_SECONDS = 75.0
 CONSISTENCY_MIN_REPLAY_SECONDS = 30.0
+SEED_AUTHORITY_EPOCH = "late-contract-random-v1"
 POLL_SECONDS = 2.0
 CONTRACT_POLL_SECONDS = 6.0
 CONTRACT_HTTP_TIMEOUT_SECONDS = 15.0
@@ -255,6 +256,8 @@ def _consistency_sample_from_payload(
     breakdown = local_payload.get("breakdown")
     if not isinstance(seed_policy, dict) or not isinstance(breakdown, dict):
         return None
+    if local_payload.get("seed_authority_epoch") != SEED_AUTHORITY_EPOCH:
+        return None
     if seed_policy.get("mode") != "contract-authoritative":
         return None
     if not bool(local_payload.get("comparable_to_official")):
@@ -308,6 +311,8 @@ def _resolve_live_consistency_decision(
             not isinstance(seed_policy, dict)
             or seed_policy.get("mode") != "contract-authoritative"
         ):
+            continue
+        if local_payload.get("seed_authority_epoch") != SEED_AUTHORITY_EPOCH:
             continue
         local_score = local_payload.get("final_score")
         if not isinstance(local_score, (int, float)):
@@ -884,6 +889,7 @@ def _handle_envelope(envelope_path: Path) -> None:
         "process_pid": os.getpid(),
         "started_at": _utc_now(),
         "state": "opening",
+        "seed_authority_epoch": SEED_AUTHORITY_EPOCH,
     }
     _write_json(bridge_status_path, state)
     _append_event(bridge_events_path, "handler_started", **state)
@@ -954,6 +960,7 @@ def _handle_envelope(envelope_path: Path) -> None:
             )
         )
         consistency_control = consistency_decision.as_dict()
+        consistency_control["seed_authority_epoch"] = SEED_AUTHORITY_EPOCH
         consistency_control["samples"] = [
             sample.as_dict() for sample in consistency_samples
         ]
@@ -1243,6 +1250,7 @@ def _handle_envelope(envelope_path: Path) -> None:
         local_payload = result.as_dict()
         local_payload.update(
             {
+                "seed_authority_epoch": SEED_AUTHORITY_EPOCH,
                 "score_semantics": (
                     "official-seed-replay"
                     if seed_plan.comparable_to_official
