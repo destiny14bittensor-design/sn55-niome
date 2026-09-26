@@ -867,6 +867,7 @@ def optimize_all_hdr_selection(
     plan_records: list[
         tuple[float, float, float, dict[JointKey, int], list[SeedCandidate], dict[str, Any]]
     ] = []
+    seen_quota_plans: set[tuple[tuple[JointKey, int], ...]] = set()
 
     for minority_share in minority_shares:
         for primary_cas_share in primary_cas_shares:
@@ -880,6 +881,17 @@ def optimize_all_hdr_selection(
                 minority_share=float(minority_share),
                 primary_cas_share=float(primary_cas_share),
             )
+            quota_signature = tuple(sorted(quotas.items()))
+            is_balance_anchor = (
+                any(
+                    abs(float(minority_share) - anchor_share) < 1e-12
+                    for anchor_share in DEFAULT_BALANCE_ANCHOR_SHARES
+                )
+                and abs(float(primary_cas_share) - 0.5) < 1e-12
+            )
+            if quota_signature in seen_quota_plans and not is_balance_anchor:
+                continue
+            seen_quota_plans.add(quota_signature)
             candidate_selection = _top_score_selection(pools, quotas)
             if candidate_selection is None or len(candidate_selection) != target_count:
                 continue

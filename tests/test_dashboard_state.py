@@ -64,7 +64,7 @@ def make_active_task(root: Path, task_id: str = "task-live") -> Path:
         "started_at": "2026-09-24T18:33:21+00:00",
         "last_observed_at": "2026-09-24T18:39:55+00:00",
         "seed_target_block": 9139652,
-        "live_stream_profiles": ["4kib", "16kib", "64kib"],
+        "live_stream_profiles": ["64kib-primary", "64kib-standby"],
         "stream_results": [
             {
                 "label": label,
@@ -74,7 +74,7 @@ def make_active_task(root: Path, task_id: str = "task-live") -> Path:
                 "send_count": 2,
                 "last_successful_send_at": "2026-09-24T18:39:59+00:00",
             }
-            for label in ("4kib", "16kib", "64kib")
+            for label in ("64kib-primary", "64kib-standby")
         ],
     })
     return task
@@ -101,7 +101,7 @@ def test_parallel_safe_and_bridge_lanes_are_distinct(tmp_path: Path):
     assert current["safe"]["uploaded"] is True
     assert current["bridge"]["state"] == "waiting_for_seeds"
     assert current["bridge"]["blocks_to_seeds"] == 252
-    assert len(current["bridge"]["streams"]) == 3
+    assert len(current["bridge"]["streams"]) == 2
     assert current["config"]["all_match"] is True
 
 
@@ -147,6 +147,29 @@ def test_official_score_is_ranked_and_compared_to_local(tmp_path: Path):
     assert current["official"]["rank"] == 1
     assert current["official"]["gap_to_first"] == 0
     assert current["overall"] == "complete"
+    assert "score_mismatch" not in {alert["code"] for alert in current["alerts"]}
+
+
+def test_unknown_seed_holdout_is_labeled_and_not_compared_as_exact(tmp_path: Path):
+    task = make_active_task(tmp_path)
+    write_json(task / "local_validation.json", {
+        "final_score": 80.0,
+        "score_semantics": "unknown-seed-holdout-estimate",
+        "comparable_to_official": False,
+        "seed_policy": {"mode": "robust-unknown"},
+        "breakdown": {"consistency_factor": 0.4},
+    })
+    scores = [{
+        "miner_hotkey": HOTKEY,
+        "final_score": 120.0,
+        "created_at": "2026-09-24T20:00:00",
+        "breakdown": {},
+    }]
+
+    current = build(tmp_path, scoreboards={task.name: scores})["current"]
+
+    assert current["local"]["score_semantics"] == "unknown-seed-holdout-estimate"
+    assert current["local"]["comparable_to_official"] is False
     assert "score_mismatch" not in {alert["code"] for alert in current["alerts"]}
 
 

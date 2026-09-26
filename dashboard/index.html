@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>NIOME Fleet Control</title>
+  <title>NIOME Federated Control</title>
   <link rel="stylesheet" href="/assets/dashboard.css">
 </head>
 <body>
@@ -15,8 +15,8 @@
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span></div>
         <div>
-          <p class="eyebrow">SUBNET 55 · FOUR ISOLATED LANES</p>
-          <h1>NIOME Fleet Control</h1>
+          <p class="eyebrow">SUBNET 55 · FEDERATED CONTROL PLANE</p>
+          <h1>NIOME Federated Control</h1>
         </div>
       </div>
       <div class="top-actions">
@@ -27,9 +27,34 @@
       </div>
     </header>
 
-    <section id="critical-banner" class="critical-banner hidden" aria-live="assertive">
-      <span class="critical-icon">!</span>
-      <div><strong id="critical-title">Fleet 경보</strong><p id="critical-detail"></p></div>
+    <section class="top-overview">
+      <section id="alert-summary-panel" class="panel alert-summary-panel" aria-live="polite" aria-labelledby="alert-summary-title">
+        <div class="alert-summary-head">
+          <div><p class="eyebrow">OPERATIONS ALERTS</p><h3 id="alert-summary-title">운영 알림</h3></div>
+          <span id="alert-summary-count" class="mini-badge">확인 중</span>
+        </div>
+        <div id="alert-summary-list" class="alert-summary-list"></div>
+      </section>
+
+      <section class="panel ranking-panel" aria-labelledby="ranking-title">
+        <div class="panel-heading ranking-heading">
+          <div><p class="eyebrow">OFFICIAL LEADERBOARD</p><h3 id="ranking-title">최근 공식 마이너 순위</h3></div>
+          <div class="ranking-meta">
+            <span id="ranking-task" class="mini-badge">채점 task 대기</span>
+            <span id="ranking-previous-task" class="ranking-previous-task">이전 task —</span>
+          </div>
+        </div>
+        <div class="ranking-list" role="table" aria-label="통합 마이너 공식 순위">
+          <div class="ranking-row ranking-header" role="row">
+            <span role="columnheader">마이너</span>
+            <span role="columnheader">UID</span>
+            <span role="columnheader">순위</span>
+            <span role="columnheader">점수</span>
+            <span role="columnheader">이전 순위</span>
+          </div>
+          <div id="ranking-body" class="ranking-body"></div>
+        </div>
+      </section>
     </section>
 
     <section class="fleet-hero panel">
@@ -40,19 +65,26 @@
         </div>
         <p class="task-label">현재 비교 과제</p>
         <h2 id="active-task">작업을 기다리고 있습니다</h2>
-        <p class="subtle">점수 차는 같은 task_id의 결과끼리만 계산합니다.</p>
+        <p class="subtle">두 서버를 읽기 전용으로 통합하며 점수 차는 같은 task_id끼리만 계산합니다.</p>
       </div>
       <div class="fleet-kpis">
         <div><span>온라인</span><strong id="online-count">—</strong></div>
-        <div><span>기준 점수</span><strong id="baseline-score">—</strong></div>
+        <div><span>소스 연결</span><strong id="source-count">—</strong></div>
+        <div><span>Task 최고</span><strong id="baseline-score">—</strong></div>
         <div><span>현재 블록</span><strong id="current-block">—</strong></div>
         <div><span>라운드 단계</span><strong id="round-phase">—</strong></div>
         <div><span>데이터 갱신</span><strong id="freshness">—</strong></div>
       </div>
     </section>
 
+    <section class="section-heading source-heading">
+      <div><p class="eyebrow">SOURCE HEALTH</p><h2>Fleet 연결 상태</h2></div>
+      <p>각 서버의 원본 수집기는 독립적으로 유지됩니다.</p>
+    </section>
+    <section id="source-grid" class="source-grid" aria-label="Fleet 소스 상태"></section>
+
     <section class="section-heading">
-      <div><p class="eyebrow">FLEET OVERVIEW</p><h2>4개 마이너 상태</h2></div>
+      <div><p class="eyebrow">FLEET OVERVIEW</p><h2 id="miner-count-heading">통합 마이너 상태</h2></div>
       <p>카드를 누르면 아래 상세 화면이 해당 마이너로 전환됩니다.</p>
     </section>
     <section id="miner-grid" class="miner-grid" aria-label="마이너 상태 카드"></section>
@@ -64,15 +96,15 @@
       </div>
       <div class="table-wrap">
         <table class="comparison-table">
-          <thead><tr><th>마이너</th><th>UID</th><th>단계</th><th>안전 제출</th><th>브리지</th><th>최종 PUT</th><th>로컬</th><th>공식 / 순위</th><th>기준 대비</th><th>CPU</th><th>RAM</th></tr></thead>
+          <thead><tr><th>Fleet</th><th>마이너</th><th>UID</th><th>단계</th><th>안전 제출</th><th>브리지</th><th>최종 PUT</th><th>로컬</th><th>공식 / 순위</th><th>최고 대비</th><th>CPU</th><th>RAM</th></tr></thead>
           <tbody id="comparison-body"></tbody>
         </table>
       </div>
     </section>
 
     <section class="section-heading detail-heading">
-      <div><p class="eyebrow">SELECTED LANE</p><h2><span id="detail-label">dollar1</span> 상세</h2></div>
-      <div class="detail-identity"><span id="detail-profile">baseline</span><code id="detail-hotkey">—</code></div>
+      <div><p class="eyebrow">SELECTED LANE</p><h2><span id="detail-label">bitcoin1</span> 상세</h2></div>
+      <div class="detail-identity"><span id="detail-source">—</span><span id="detail-profile">baseline</span></div>
     </section>
 
     <section class="lanes">
@@ -89,7 +121,7 @@
     <section class="metric-grid">
       <article class="metric panel"><p>로컬 점수</p><strong id="local-score">—</strong><span id="local-source">채점 대기</span></article>
       <article class="metric panel"><p>공식 점수 / 순위</p><strong id="official-score">—</strong><span id="official-rank">공식 검증 전</span></article>
-      <article class="metric panel"><p>dollar1 기준 대비</p><strong id="score-delta">—</strong><span id="delta-source">동일 과제만 비교</span></article>
+      <article class="metric panel"><p id="score-delta-label">동일 task 최고 대비</p><strong id="score-delta">—</strong><span id="delta-source">동일 과제만 비교</span></article>
       <article class="metric panel"><p>일관성</p><strong id="consistency-score">—</strong><span>공식 우선 · 로컬 보조</span></article>
     </section>
 
@@ -142,7 +174,7 @@
     </section>
 
     <footer>
-      <span>읽기 전용 · 네 마이너의 실행과 아티팩트를 변경하지 않습니다.</span>
+      <span>읽기 전용 · 두 Fleet의 마이너·Bridge·아티팩트를 변경하지 않습니다.</span>
       <span id="footer-generated">—</span>
     </footer>
   </main>

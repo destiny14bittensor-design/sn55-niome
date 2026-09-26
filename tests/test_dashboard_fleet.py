@@ -127,12 +127,12 @@ def test_offline_lane_raises_fleet_critical_alert() -> None:
     assert dollar4["alerts"][0]["code"] == "lane_process_offline"
 
 
-def test_live_fleet_keeps_only_dollar1_as_baseline() -> None:
+def test_live_fleet_keeps_only_bitcoin1_as_baseline() -> None:
     profiles = {item.lane_id: item.profile for item in FLEET_LANES}
 
     assert profiles == {
-        "dollar1": "baseline",
-        "dollar2": "exploration",
-        "dollar3": "exploration",
-        "dollar4": "exploration",
+        "bitcoin1": "baseline",
+        "bitcoin2": "exploration",
+        "hype1": "exploration",
+        "hype2": "exploration",
     }

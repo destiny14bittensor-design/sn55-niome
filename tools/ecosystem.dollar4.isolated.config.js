@@ -11,7 +11,7 @@ module.exports = {
       kill_timeout: 10000,
       env: {
         NIOME_ARTIFACT_ROOT: "/home/administrator/workspace/subnet-niome/artifacts/miners/dollar4",
-        NIOME_EXPLORATION_PROFILE: "5ES1fyTQdvQjtmGokDSsb3fw2MyvzygAQ1oiRKiy9MDJwqKU",
+        NIOME_EXPLORATION_PROFILE: "5HKLhT3ie4VkW9hG3Vgn2MiYgZ9PQtVnFbJ18fmDh5ZkWY86",
       },
     },
     {
@@ -19,7 +19,7 @@ module.exports = {
       cwd: "/home/administrator/workspace/subnet-niome",
       script: "/home/administrator/workspace/subnet-niome/.venv/bin/python",
       interpreter: "none",
-      args: "neurons/miner.py --netuid 55 --network finney --wallet main --wallet-hotkey dollar4 --axon.port 8094 --axon.external-ip 69.30.204.53 --blacklist.force_validator_permit",
+      args: "neurons/miner.py --netuid 55 --network finney --wallet main4 --wallet-hotkey hype2 --wallet-path /home/administrator/.bittensor/wallets/main --axon.port 8094 --axon.external-ip 69.30.204.53 --blacklist.force_validator_permit",
       autorestart: true,
       watch: false,
       max_memory_restart: "1200M",
@@ -43,7 +43,7 @@ module.exports = {
         NIOME_DASH_PORT: "8114",
         NIOME_DASH_NETWORK: "finney",
         NIOME_DASH_ARTIFACT_ROOT: "/home/administrator/workspace/subnet-niome/artifacts/miners/dollar4",
-        NIOME_DASH_MINER_HOTKEY: "5ES1fyTQdvQjtmGokDSsb3fw2MyvzygAQ1oiRKiy9MDJwqKU",
+        NIOME_DASH_MINER_HOTKEY: "5HKLhT3ie4VkW9hG3Vgn2MiYgZ9PQtVnFbJ18fmDh5ZkWY86",
         NIOME_DASH_MINER_PROCESS: "niome-dollar4",
         NIOME_DASH_BRIDGE_PROCESS: "niome-seed-bridge-dollar4",
         NIOME_DASH_GUIDE_VARIANTS: "72",

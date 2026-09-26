@@ -93,6 +93,7 @@ class BaseNeuron(ABC):
             self.wallet = bt.Wallet(
                 name=self.config.wallet,
                 hotkey=self.config.wallet_hotkey,
+                path=self.config.wallet_path,
             )
             # v11: Client takes network= for both named networks and raw ws:// endpoints.
             # retry_forever keeps the WS alive through node hiccups.

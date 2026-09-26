@@ -20,6 +20,7 @@ ACTIVE_BRIDGE_STATES = {
     "created",
     "opening",
     "streaming",
+    "waiting_for_contract_seed",
     "waiting_for_seeds",
     "building",
     "finishing_upload",
@@ -130,6 +131,13 @@ def _local_summary(task_dir: Path) -> dict[str, Any]:
                 "available": True,
                 "source": source,
                 "score": _number(data.get("final_score")),
+                "score_semantics": data.get(
+                    "score_semantics", "legacy-exact-replay"
+                ),
+                "comparable_to_official": bool(
+                    data.get("comparable_to_official", True)
+                ),
+                "seed_policy": dict(data.get("seed_policy") or {}),
                 "breakdown": dict(data.get("breakdown") or {}),
                 # The validator artifacts contain the complete experiment lists.
                 # The dashboard only needs their counts; returning the records
@@ -141,6 +149,9 @@ def _local_summary(task_dir: Path) -> dict[str, Any]:
         "available": False,
         "source": None,
         "score": None,
+        "score_semantics": None,
+        "comparable_to_official": False,
+        "seed_policy": {},
         "breakdown": {},
         "valid_experiments": None,
         "invalid_experiments": None,
@@ -366,7 +377,11 @@ def _alerts(
             "detail": "안전 제출은 완료됐지만 권장 시작 시각을 넘겼습니다.",
         })
 
-    if local["score"] is not None and official["score"] is not None:
+    if (
+        local["score"] is not None
+        and official["score"] is not None
+        and local.get("comparable_to_official", True)
+    ):
         delta = abs(float(local["score"]) - float(official["score"]))
         if delta > 1e-9:
             alerts.append({

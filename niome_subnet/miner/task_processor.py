@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 
 from niome_subnet.genomics.model import Task
+from niome_subnet.genomics.seed_policy import resolve_seed_plan
 from niome_subnet.genomics.submission_builder import build_submission
 from niome_subnet.utils.settings import CELL_TYPES_URL, CHR11_PATH
 from tools.local_validator.artifacts import ArtifactBundle, sha256_bytes
@@ -178,6 +179,7 @@ def _evaluation_worker(
     candidates: list[tuple[str, list[dict[str, Any]]]],
     artifact_paths: dict[str, str],
     output_queue,
+    evaluation_seeds: list[int] | None = None,
 ) -> None:
     """Score candidates in an isolated process so the parent can hard-stop it."""
     try:
@@ -187,6 +189,12 @@ def _evaluation_worker(
             chromosome_11_path=artifact_paths["chromosome_11_path"],
             cell_types_path=artifact_paths["cell_types_path"],
         )
+        if evaluation_seeds:
+            scoring_contract = dict(artifacts.contract)
+            scoring_contract["seed"] = ",".join(
+                str(seed) for seed in evaluation_seeds
+            )
+            artifacts = replace(artifacts, contract=scoring_contract)
         for index, (label, submission) in enumerate(candidates):
             try:
                 raw = json.dumps(
@@ -203,6 +211,10 @@ def _evaluation_worker(
                         "label": label,
                         "rows": len(submission),
                         "final_score": result.final_score,
+                        "per_seed_final_scores": [
+                            float(item["stage5"]["final_score"])
+                            for item in result.per_seed
+                        ],
                         "breakdown": result.breakdown,
                         "submission_sha256": sha256_bytes(raw),
                     }
@@ -233,6 +245,7 @@ def _score_candidates_until_deadline(
     artifact_paths: dict[str, str],
     *,
     deadline_monotonic: float,
+    evaluation_seeds: list[int] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Return completed scores and terminate scoring at the hard deadline."""
     if _remaining_seconds(deadline_monotonic) <= 0:
@@ -242,7 +255,7 @@ def _score_candidates_until_deadline(
     output_queue = context.Queue()
     process = context.Process(
         target=_evaluation_worker,
-        args=(candidates, artifact_paths, output_queue),
+        args=(candidates, artifact_paths, output_queue, evaluation_seeds),
         daemon=True,
     )
     results: list[dict[str, Any]] = []
@@ -452,18 +465,23 @@ def process_live_task(
             chromosome_11_path=chromosome_path,
             cell_types_path=cell_types_path,
         )
+        seed_plan = resolve_seed_plan(
+            contract,
+            task.id,
+            supplied_seeds=round_seeds,
+        )
         submission, builder_diagnostics = build_submission(
             contract=contract,
             reference=reference,
             chromosome_11=artifacts.chromosome_11,
             cell_types=cell_types,
             deadline_monotonic=builder_deadline,
-            selection_profile="seed-aware" if round_seeds else "ranked",
-            round_seeds=round_seeds,
+            selection_profile=seed_plan.selection_profile,
+            round_seeds=list(seed_plan.optimization_seeds),
         )
         candidates = (
-            [("seed-aware-full", submission)]
-            if round_seeds
+            [("contract-seed-aware-full", submission)]
+            if seed_plan.mode == "contract-authoritative"
             else _candidate_variants(submission)
         )
         artifact_paths = {
@@ -472,7 +490,7 @@ def process_live_task(
             "chromosome_11_path": str(chromosome_path.resolve()),
             "cell_types_path": str(cell_types_path.resolve()),
         }
-        if round_seeds:
+        if seed_plan.mode == "contract-authoritative":
             candidate_scores, scoring_deadline_reached = [], False
         else:
             candidate_scores, scoring_deadline_reached = (
@@ -480,6 +498,7 @@ def process_live_task(
                     candidates,
                     artifact_paths,
                     deadline_monotonic=scoring_deadline,
+                    evaluation_seeds=list(seed_plan.evaluation_seeds),
                 )
             )
         successful_scores = [
@@ -494,6 +513,7 @@ def process_live_task(
             selected_index = max(
                 successful_scores,
                 key=lambda item: (
+                    min(item.get("per_seed_final_scores") or [float("-inf")]),
                     float(item["final_score"]),
                     int(item.get("rows", 0)),
                     -int(item["index"]),
@@ -507,6 +527,12 @@ def process_live_task(
             "selected_index": selected_index,
             "selected_label": selected_label,
             "fallback_to_unscored_baseline": not successful_scores,
+            "selection_objective": (
+                "maximin-holdout-then-mean"
+                if seed_plan.mode != "contract-authoritative"
+                else "authoritative-contract-seed"
+            ),
+            "seed_policy": seed_plan.as_dict(),
             "results": candidate_scores,
         }
         _write_json(task_dir / "candidate_scores.json", scoring_diagnostics)
@@ -515,6 +541,7 @@ def process_live_task(
                 "candidate_count": len(candidates),
                 "selected_candidate": selected_label,
                 "local_scoring_deadline_reached": scoring_deadline_reached,
+                "seed_policy": seed_plan.as_dict(),
             }
         )
         submission_raw = json.dumps(
@@ -537,6 +564,7 @@ def process_live_task(
                 "upload_start_target_missed": (
                     upload_started_monotonic > upload_start_deadline
                 ),
+                "seed_policy": seed_plan.as_dict(),
             }
         )
         _write_json(status_path, status)
@@ -557,16 +585,30 @@ def process_live_task(
         )
         _write_json(status_path, status)
         evaluation_artifacts = artifacts
-        if round_seeds:
+        if seed_plan.evaluation_seeds:
             scoring_contract = dict(contract)
-            scoring_contract["seed"] = ",".join(str(seed) for seed in round_seeds)
+            scoring_contract["seed"] = ",".join(
+                str(seed) for seed in seed_plan.evaluation_seeds
+            )
             evaluation_artifacts = replace(artifacts, contract=scoring_contract)
         local_result = evaluate_submission(
             submission,
             evaluation_artifacts,
             raw_submission_bytes=submission_raw,
         )
-        _write_json(task_dir / "local_validation.json", local_result.as_dict())
+        local_payload = local_result.as_dict()
+        local_payload.update(
+            {
+                "score_semantics": (
+                    "official-seed-replay"
+                    if seed_plan.comparable_to_official
+                    else "unknown-seed-holdout-estimate"
+                ),
+                "comparable_to_official": seed_plan.comparable_to_official,
+                "seed_policy": seed_plan.as_dict(),
+            }
+        )
+        _write_json(task_dir / "local_validation.json", local_payload)
         manifest = {
             "task_id": task.id,
             "received_at": received_at,

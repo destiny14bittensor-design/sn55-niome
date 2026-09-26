@@ -8,10 +8,24 @@ excluded from Git.
 
 | Lane | UID | Axon | PM2 miner | PM2 bridge | Builder profile | Artifact root |
 |---|---:|---:|---|---|---|---|
-| dollar1 | 80 | 8091 | `niome-dollar1` | `niome-seed-bridge` | baseline | `artifacts/live` |
-| dollar2 | 243 | 8092 | `niome-dollar2` | `niome-seed-bridge-dollar2` | exploration | `artifacts/miners/dollar2` |
-| dollar3 | 45 | 8093 | `niome-dollar3` | `niome-seed-bridge-dollar3` | exploration | `artifacts/miners/dollar3` |
-| dollar4 | 198 | 8094 | `niome-dollar4` | `niome-seed-bridge-dollar4` | exploration | `artifacts/miners/dollar4` |
+| bitcoin1 (`main3`) | 155 | 8091 | `niome-dollar1` | `niome-seed-bridge` | common champion | `artifacts/live` |
+| bitcoin2 (`main3`) | 223 | 8092 | `niome-dollar2` | `niome-seed-bridge-dollar2` | champion + residual | `artifacts/miners/dollar2` |
+| hype1 (`main4`) | 96 | 8093 | `niome-dollar3` | `niome-seed-bridge-dollar3` | champion + residual | `artifacts/miners/dollar3` |
+| hype2 (`main4`) | 159 | 8094 | `niome-dollar4` | `niome-seed-bridge-dollar4` | champion + residual | `artifacts/miners/dollar4` |
+
+The seed-aware optimizer is hierarchical. Every lane first searches the same
+replay-proven common candidate reservoirs and keeps that result as a hard
+non-regression floor. Dollar2-dollar4 then search one additional deterministic
+reservoir and replace the common result only when the exact Stage-2 x Stage-5
+proxy improves. A promoted dollar1 improvement therefore becomes the starting
+point for all exploration lanes on the next bridge process load.
+
+Each bridge keeps two 64 KiB/s PUTs: a primary and a staggered warm standby.
+The retired 4/16 KiB/s streams repeatedly closed before seed publication. Only
+one 64 KiB/s connection is allowed to flush its remaining fixed-length body at
+a time; the standby is promoted only after primary failure, and is cancelled
+after the first HTTP 2xx completion. This bounds the fleet's waiting traffic to
+512 KiB/s while avoiding parallel completion bursts against the same S3 key.
 
 The read-only Fleet Dashboard is `niome-dashboard` on port `8111`. It reads
 all four roots directly. Ports 8112-8114 are obsolete and must remain stopped.
@@ -23,7 +37,8 @@ because no writable task directory is shared between lanes.
 
 - Python 3.12 and `uv`
 - Node.js and PM2
-- four registered hotkeys named `dollar1` through `dollar4` in wallet `main`
+- registered hotkeys `bitcoin1/bitcoin2` in wallet `main3` and `hype1/hype2`
+  in wallet `main4`, rooted at `~/.bittensor/wallets/main`
 - TCP ports 8091-8094 reachable from validators
 - enough memory for four simultaneous builders
 

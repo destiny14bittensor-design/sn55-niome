@@ -9,6 +9,10 @@ import random
 import time
 from typing import Any
 
+from niome_subnet.genomics.consistency_control import (
+    PARTIAL_SEED_ANCHOR,
+    all_seed_hdr_share_for_target,
+)
 from niome_subnet.genomics.validation.stage12 import (
     build_kmer_index,
     check_pam,
@@ -24,6 +28,7 @@ from niome_subnet.genomics.seed_optimizer import (
     SeedCandidate,
     build_optimizer_pool,
     optimize_all_hdr_selection,
+    score_selection,
 )
 
 
@@ -38,11 +43,21 @@ SEED_FOCUSED_MIN_BATCHES = 2
 SEED_FOCUSED_RESERVOIR_RESERVE_FACTOR = 1.10
 SEED_FOCUSED_NEAR_BEST_TOLERANCE = 0.01
 SEED_OPTIMIZER_TIME_BUDGET_SECONDS = 20.0
-EXPLORATION_POOL_PER_BUCKET = 320
-EXPLORATION_SCORE_LEADERS_PER_BUCKET = 240
 EXPLORATION_OPTIMIZER_TIME_BUDGET_SECONDS = 12.0
 EXPLORATION_GRID_STEP_THOUSANDTHS = 5
 EXPLORATION_VARIANTS_PER_ANCHOR = 384
+# These three reservoirs are the replay-proven fleet champion base.  Every
+# seed-aware lane searches their union; an exploratory lane adds one private
+# residual reservoir on top.  Keeping the salts stable makes a promoted
+# improvement immediately available to dollar1 and all descendants.
+COMMON_CHAMPION_PROFILES = (
+    "5H1jPksvzJuak6P63VAp7QttcRpQ1PuT9BNDyMT3qGEYovdQ",
+    "5EeqkTcDzGg7Ge89N1DJzQv5ehyCEPMBreCHqcxfEpB3WU21",
+    "5HKLhT3ie4VkW9hG3Vgn2MiYgZ9PQtVnFbJ18fmDh5ZkWY86",
+)
+COMMON_CHAMPION_PROFILE_VERSION = "fleet-champion-v1"
+CHAMPION_POOL_PER_BUCKET = 512
+CHAMPION_SCORE_LEADERS_PER_BUCKET = 320
 
 
 def _guide_for(seq: str, start: int, length: int, strand: str) -> str:
@@ -236,23 +251,64 @@ def build_submission(
     selection_profile: str = "ranked",
     round_seeds: list[int] | None = None,
     exploration_profile: str | None = None,
+    seed_focused_variants_per_anchor: int | None = None,
+    seed_optimizer_time_budget_seconds: float | None = None,
+    consistency_target: float | None = None,
+    consistency_candidate_submissions: (
+        list[tuple[str, list[dict[str, Any]]]] | None
+    ) = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Generate valid, diverse rows and rank within each coverage bucket.
 
     The builder uses only public task artifacts and the same Stage 1/2 functions
     as the validator. It balances mutation/Cas/strand buckets before filling any
-    remaining capacity by Stage 2 weighted score.
+    remaining capacity by Stage 2 weighted score. ``seed-aware`` is reserved for
+    authoritative validator seeds; unknown seeds stay on the structural ranked
+    path and are evaluated out-of-sample by the task processor.
     """
+    managed_consistency_target = (
+        max(0.0, min(1.0, float(consistency_target)))
+        if consistency_target is not None and round_seeds and len(round_seeds) >= 3
+        else None
+    )
     exploration_profile = (exploration_profile or "").strip()
+    exploration_profiles = [
+        (profile, False) for profile in COMMON_CHAMPION_PROFILES
+    ]
+    if exploration_profile:
+        # The lane's old profile may already be part of the promoted common
+        # base.  Prefixing it creates new residual coverage instead of paying
+        # to regenerate a duplicate reservoir.
+        exploration_profiles.append(
+            (f"residual-v1|{exploration_profile}", True)
+        )
     exploration_enabled = bool(
-        exploration_profile
-        and selection_profile == "seed-aware"
+        selection_profile == "seed-aware"
         and round_seeds
+        and managed_consistency_target is None
+        and exploration_profiles
+    )
+    search_profile = "|".join(
+        (COMMON_CHAMPION_PROFILE_VERSION, exploration_profile or "baseline")
     )
     exploration_profile_id = (
-        hashlib.sha256(exploration_profile.encode()).hexdigest()[:12]
+        hashlib.sha256(search_profile.encode()).hexdigest()[:12]
         if exploration_enabled
         else None
+    )
+    common_profile_ids = tuple(
+        hashlib.sha256(profile.encode()).hexdigest()[:12]
+        for profile in COMMON_CHAMPION_PROFILES
+    )
+    focused_variant_limit = (
+        SEED_FOCUSED_VARIANTS_PER_ANCHOR
+        if seed_focused_variants_per_anchor is None
+        else max(1, int(seed_focused_variants_per_anchor))
+    )
+    optimizer_time_budget = (
+        SEED_OPTIMIZER_TIME_BUDGET_SECONDS
+        if seed_optimizer_time_budget_seconds is None
+        else max(0.0, float(seed_optimizer_time_budget_seconds))
     )
 
     mutation_map = reference["mutation_map"]
@@ -281,6 +337,9 @@ def build_submission(
 
     buckets: dict[tuple[str, str, str], list[tuple[float, dict[str, Any]]]] = defaultdict(list)
     exploration_buckets: dict[
+        tuple[str, str, str], list[tuple[float, dict[str, Any]]]
+    ] = defaultdict(list)
+    common_exploration_buckets: dict[
         tuple[str, str, str], list[tuple[float, dict[str, Any]]]
     ] = defaultdict(list)
     anchors: dict[tuple[str, str, str], list[tuple[int, int, str]]] = defaultdict(list)
@@ -354,6 +413,7 @@ def build_submission(
 
     feature_cache: dict[str, tuple[float, float, float]] = {}
     outcome_cache: dict[str, tuple[int, int, int, int]] = {}
+    outcome_hdr_cache: dict[str, tuple[bool, ...]] = {}
 
     def cache_seed_outcome_quality(
         experiment: dict[str, Any],
@@ -388,6 +448,9 @@ def build_submission(
             },
         }
         outcomes = [simulate(wrapped, seed) for seed in (round_seeds or [])]
+        outcome_hdr_cache[experiment_id] = tuple(
+            item["outcome"] == "HDR" for item in outcomes
+        )
         hdr_count = sum(item["outcome"] == "HDR" for item in outcomes)
         cut_count = sum(item["outcome"] != "no_cut" for item in outcomes)
         total_indel = sum(int(item["indel_length"]) for item in outcomes)
@@ -454,6 +517,7 @@ def build_submission(
                             kmer_index,
                             max_mismatches=max_mismatches,
                             salt=salt,
+                            limit=focused_variant_limit,
                         ),
                     )
                 )
@@ -482,7 +546,7 @@ def build_submission(
             near_best_starts = 0
             for offset in range(
                 0,
-                SEED_FOCUSED_VARIANTS_PER_ANCHOR,
+                focused_variant_limit,
                 SEED_FOCUSED_BATCH_SIZE,
             ):
                 if deadline_expired():
@@ -563,68 +627,75 @@ def build_submission(
             }
             if exploration_enabled and not deadline_reached:
                 exploration_known_ids = set(known_ids)
-                for start, length, exact_guide in strongest:
-                    profile_salt = "|".join(
-                        (
-                            mutation,
+                for candidate_profile, is_residual_profile in exploration_profiles:
+                    for start, length, exact_guide in strongest:
+                        profile_salt = "|".join(
+                            (
+                                mutation,
+                                cas,
+                                strand,
+                                str(start),
+                                str(length),
+                                ",".join(str(seed) for seed in round_seeds),
+                                candidate_profile,
+                            )
+                        )
+                        profile_variants = _focused_guide_variants(
+                            exact_guide,
                             cas,
-                            strand,
-                            str(start),
-                            str(length),
-                            ",".join(str(seed) for seed in round_seeds),
-                            exploration_profile,
-                        )
-                    )
-                    profile_variants = _focused_guide_variants(
-                        exact_guide,
-                        cas,
-                        kmer_index,
-                        max_mismatches=max_mismatches,
-                        salt=profile_salt,
-                        limit=EXPLORATION_VARIANTS_PER_ANCHOR,
-                    )
-                    for guide in profile_variants:
-                        if deadline_expired():
-                            deadline_reached = True
-                            break
-                        identity = "|".join(
-                            [mutation, cas, strand, str(start), str(length), guide]
-                        )
-                        experiment_id = hashlib.sha256(identity.encode()).hexdigest()[:24]
-                        if experiment_id in exploration_known_ids:
-                            continue
-                        experiment = {
-                            "experiment_id": experiment_id,
-                            "guideRNA": guide,
-                            "target_alignment_start": start,
-                            "target_alignment_end": start + length,
-                            "strand": strand,
-                            "mutation": mutation,
-                            "cas_system": cas,
-                        }
-                        if contract.get("cell_type") is not None:
-                            experiment["cell_type"] = contract["cell_type"]
-                        stage1_score, _ = stage1(
-                            experiment, chromosome_11, mutation_map, contract
-                        )
-                        if stage1_score != 1.0:
-                            continue
-                        _, stage2_info = stage2(
-                            cell_types,
-                            experiment,
-                            chromosome_11,
-                            mutation_map,
-                            contract,
                             kmer_index,
+                            max_mismatches=max_mismatches,
+                            salt=profile_salt,
+                            limit=EXPLORATION_VARIANTS_PER_ANCHOR,
                         )
-                        exploration_known_ids.add(experiment_id)
-                        exploration_candidates_added += 1
-                        if cache_seed_outcome_quality(experiment, stage2_info)[0] != 1:
-                            continue
-                        exploration_all_hdr_candidates_added += 1
-                        exploration_buckets[key].append(
-                            (float(stage2_info["weighted_score"]), experiment)
-                        )
+                        for guide in profile_variants:
+                            if deadline_expired():
+                                deadline_reached = True
+                                break
+                            identity = "|".join(
+                                [mutation, cas, strand, str(start), str(length), guide]
+                            )
+                            experiment_id = hashlib.sha256(identity.encode()).hexdigest()[:24]
+                            if experiment_id in exploration_known_ids:
+                                continue
+                            experiment = {
+                                "experiment_id": experiment_id,
+                                "guideRNA": guide,
+                                "target_alignment_start": start,
+                                "target_alignment_end": start + length,
+                                "strand": strand,
+                                "mutation": mutation,
+                                "cas_system": cas,
+                            }
+                            if contract.get("cell_type") is not None:
+                                experiment["cell_type"] = contract["cell_type"]
+                            stage1_score, _ = stage1(
+                                experiment, chromosome_11, mutation_map, contract
+                            )
+                            if stage1_score != 1.0:
+                                continue
+                            _, stage2_info = stage2(
+                                cell_types,
+                                experiment,
+                                chromosome_11,
+                                mutation_map,
+                                contract,
+                                kmer_index,
+                            )
+                            exploration_known_ids.add(experiment_id)
+                            exploration_candidates_added += 1
+                            if cache_seed_outcome_quality(experiment, stage2_info)[0] != 1:
+                                continue
+                            exploration_all_hdr_candidates_added += 1
+                            exploration_buckets[key].append(
+                                (float(stage2_info["weighted_score"]), experiment)
+                            )
+                            if not is_residual_profile:
+                                common_exploration_buckets[key].append(
+                                    (float(stage2_info["weighted_score"]), experiment)
+                                )
+                        if deadline_reached:
+                            break
                     if deadline_reached:
                         break
 
@@ -758,6 +829,10 @@ def build_submission(
         """
         return cache_seed_outcome_quality(experiment)
 
+    def seed_hdr_pattern(experiment: dict[str, Any]) -> tuple[bool, ...]:
+        cache_seed_outcome_quality(experiment)
+        return outcome_hdr_cache[experiment["experiment_id"]]
+
     def add_seed_aware(values: list[tuple[float, dict[str, Any]]], limit: int) -> None:
         ranked = sorted(
             values,
@@ -767,6 +842,97 @@ def build_submission(
             ),
         )
         add_ordered(ranked, limit)
+
+    managed_bucket_mix: dict[str, dict[str, int]] = {}
+
+    def add_managed_seed_aware(
+        key: tuple[str, str, str],
+        values: list[tuple[float, dict[str, Any]]],
+        limit: int,
+        target: float | None,
+        bucket_mix: dict[str, dict[str, int]],
+        *,
+        full_share_override: float | None = None,
+    ) -> None:
+        """Fill a bucket with a monotonic one/two/three-seed HDR mixture.
+
+        The exact Stage-4 model is nonlinear, so this is intentionally a
+        control surface rather than a claim that row percentages equal the
+        resulting factor.  Exact replay records the achieved factor and the
+        history controller fails back to maximum score whenever the winning
+        threshold cannot be met safely.
+        """
+        if target is None:
+            add_seed_aware(values, limit)
+            return
+
+        ranked = sorted(values, key=rank_key)
+        full = [item for item in ranked if all(seed_hdr_pattern(item[1]))]
+        two_only = [
+            item
+            for item in ranked
+            if all(seed_hdr_pattern(item[1])[:2])
+            and not all(seed_hdr_pattern(item[1]))
+        ]
+        one_only = [
+            item
+            for item in ranked
+            if seed_hdr_pattern(item[1])[0]
+            and not seed_hdr_pattern(item[1])[1]
+        ]
+
+        if target >= PARTIAL_SEED_ANCHOR:
+            full_share = (
+                max(0.0, min(1.0, full_share_override))
+                if full_share_override is not None
+                else all_seed_hdr_share_for_target(target)
+            )
+            requested = (
+                ("full", full, int(round(limit * full_share))),
+                ("two_seed", two_only, limit - int(round(limit * full_share))),
+            )
+        else:
+            one_seed_anchor = max(0.0, PARTIAL_SEED_ANCHOR - 0.30)
+            normalized_target = max(
+                0.0,
+                min(
+                    1.0,
+                    (target - one_seed_anchor)
+                    / (PARTIAL_SEED_ANCHOR - one_seed_anchor),
+                ),
+            )
+            two_share = (
+                min(1.0, math.sqrt(normalized_target) + 0.05)
+                if normalized_target > 0.0
+                else 0.0
+            )
+            requested = (
+                ("two_seed", two_only, int(round(limit * two_share))),
+                ("one_seed", one_only, limit - int(round(limit * two_share))),
+            )
+
+        before = len(selected)
+        counts: dict[str, int] = {}
+        for label, pool, requested_count in requested:
+            start = len(selected)
+            add_ordered(pool, min(requested_count, limit - (len(selected) - before)))
+            counts[label] = len(selected) - start
+        # Scarce outcome classes must only push consistency upward.  Full-HDR
+        # then two-seed rows are therefore the fail-safe refill order.
+        for label, pool in (("full_refill", full), ("two_seed_refill", two_only)):
+            remaining = limit - (len(selected) - before)
+            if remaining <= 0:
+                break
+            start = len(selected)
+            add_ordered(pool, remaining)
+            counts[label] = len(selected) - start
+        remaining = limit - (len(selected) - before)
+        if remaining > 0:
+            start = len(selected)
+            add_ordered(ranked, remaining)
+            counts["general_refill"] = len(selected) - start
+        counts["selected"] = len(selected) - before
+        bucket_mix["|".join(key)] = counts
 
     def add_energy_anchored(
         values: list[tuple[float, dict[str, Any]]],
@@ -816,26 +982,94 @@ def build_submission(
             if not progressed:
                 return
 
-    for key in joint_keys:
-        values = buckets.get(key, [])
-        if selection_profile == "seed-aware" and round_seeds:
-            add_seed_aware(values, quotas[key])
-        elif selection_profile == "energy-spread":
-            add_energy_anchored(values, quotas[key], (0.45, 0.60, 0.75, 0.90, 1.0))
-        elif selection_profile == "cas-separated":
-            anchors = (
-                (0.72, 0.84, 0.94, 1.0)
-                if key[1] == "Cas9"
-                else (0.25, 0.40, 0.55, 0.68)
-            )
-            add_energy_anchored(values, quotas[key], anchors)
-        else:
-            add_ranked(values, quotas[key])
+    def select_initial_submission(
+        target: float | None,
+        *,
+        full_share_override: float | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, int]]]:
+        selected.clear()
+        selected_designs.clear()
+        bucket_mix: dict[str, dict[str, int]] = {}
+        for key in joint_keys:
+            values = buckets.get(key, [])
+            if selection_profile == "seed-aware" and round_seeds:
+                add_managed_seed_aware(
+                    key,
+                    values,
+                    quotas[key],
+                    target,
+                    bucket_mix,
+                    full_share_override=full_share_override,
+                )
+            elif selection_profile == "energy-spread":
+                add_energy_anchored(
+                    values,
+                    quotas[key],
+                    (0.45, 0.60, 0.75, 0.90, 1.0),
+                )
+            elif selection_profile == "cas-separated":
+                anchors = (
+                    (0.72, 0.84, 0.94, 1.0)
+                    if key[1] == "Cas9"
+                    else (0.25, 0.40, 0.55, 0.68)
+                )
+                add_energy_anchored(values, quotas[key], anchors)
+            else:
+                add_ranked(values, quotas[key])
 
-    if len(selected) < target_count:
-        add_ranked(
-            [item for values in buckets.values() for item in values],
-            target_count - len(selected),
+        if len(selected) < target_count:
+            add_ranked(
+                [item for values in buckets.values() for item in values],
+                target_count - len(selected),
+            )
+        return list(selected), bucket_mix
+
+    selected_value, managed_bucket_mix = select_initial_submission(
+        managed_consistency_target
+    )
+    selected[:] = selected_value
+
+    consistency_candidate_mix: dict[str, dict[str, dict[str, int]]] = {}
+    maximum_candidate_for_optimizer: list[dict[str, Any]] | None = None
+    if (
+        managed_consistency_target is not None
+        and consistency_candidate_submissions is not None
+    ):
+        seen_candidate_ids: set[tuple[str, ...]] = set()
+        # Exact replay shows a steep transition near the all-HDR end: even an
+        # 80% full-HDR mixture remained near the two-seed ~0.71 anchor.  Probe
+        # that transition densely; the exact selector evaluates the highest
+        # shares first and retains the pure all-HDR fallback.
+        for full_share in (0.0, 0.80, 0.85, 0.90, 0.95):
+            candidate, candidate_mix = select_initial_submission(
+                managed_consistency_target,
+                full_share_override=full_share,
+            )
+            identity = tuple(row["experiment_id"] for row in candidate)
+            if identity in seen_candidate_ids:
+                continue
+            seen_candidate_ids.add(identity)
+            label = f"managed-full-hdr-{int(full_share * 100):02d}pct"
+            consistency_candidate_submissions.append((label, candidate))
+            consistency_candidate_mix[label] = candidate_mix
+        maximum_candidate, _ = select_initial_submission(None)
+        consistency_candidate_submissions.append(
+            ("max-score-fallback", maximum_candidate)
+        )
+        maximum_candidate_for_optimizer = maximum_candidate
+        # Spend the ordinary bounded optimizer budget on the safety fallback.
+        # Target candidates are selected by exact replay later; the fallback
+        # should retain as much score as timing permits.
+        selected[:] = maximum_candidate
+        selected_designs.clear()
+        selected_designs.update(
+            (
+                row["cas_system"],
+                row["target_alignment_start"],
+                row["strand"],
+                row["guideRNA"],
+            )
+            for row in selected
         )
 
     optimizer_diagnostics: dict[str, Any] | None = None
@@ -849,7 +1083,11 @@ def build_submission(
         pool_prepare_elapsed = 0.0
         search_elapsed = 0.0
         optimizer_pool_diagnostics: dict[str, dict[str, int]] = {}
+        common_pool_diagnostics: dict[str, dict[str, int]] = {}
         exploration_pool_diagnostics: dict[str, dict[str, int]] = {}
+        common_exploration_pools: dict[
+            tuple[str, str, str], list[SeedCandidate]
+        ] = {}
         exploration_pools: dict[
             tuple[str, str, str], list[SeedCandidate]
         ] = {}
@@ -899,9 +1137,37 @@ def build_submission(
                 )
                 optimizer_pool_diagnostics["|".join(key)] = pool_diagnostics
                 if exploration_enabled:
-                    exploration_values = list(all_hdr_values)
-                    exploration_values.extend(exploration_buckets.get(key, ()))
-                    exploration_values.sort(key=rank_key)
+                    common_values = list(all_hdr_values)
+                    common_values.extend(common_exploration_buckets.get(key, ()))
+                    common_values.sort(key=rank_key)
+                    common_candidates = [
+                        SeedCandidate(
+                            weighted_score=score,
+                            experiment=experiment,
+                            outcome_quality=outcome_cache[experiment["experiment_id"]],
+                        )
+                        for score, experiment in common_values
+                    ]
+                    (
+                        common_exploration_pools[key],
+                        common_pool_diagnostics["|".join(key)],
+                    ) = build_optimizer_pool(
+                        common_candidates,
+                        pool_limit=CHAMPION_POOL_PER_BUCKET,
+                        score_leader_count=CHAMPION_SCORE_LEADERS_PER_BUCKET,
+                    )
+                    exploration_values = list(common_values)
+                    if exploration_profile:
+                        common_ids = {
+                            experiment["experiment_id"]
+                            for _, experiment in common_values
+                        }
+                        exploration_values.extend(
+                            (score, experiment)
+                            for score, experiment in exploration_buckets.get(key, ())
+                            if experiment["experiment_id"] not in common_ids
+                        )
+                        exploration_values.sort(key=rank_key)
                     exploration_candidates = [
                         SeedCandidate(
                             weighted_score=score,
@@ -915,13 +1181,13 @@ def build_submission(
                         exploration_pool_diagnostics["|".join(key)],
                     ) = build_optimizer_pool(
                         exploration_candidates,
-                        pool_limit=EXPLORATION_POOL_PER_BUCKET,
-                        score_leader_count=EXPLORATION_SCORE_LEADERS_PER_BUCKET,
+                        pool_limit=CHAMPION_POOL_PER_BUCKET,
+                        score_leader_count=CHAMPION_SCORE_LEADERS_PER_BUCKET,
                     )
 
             pool_prepare_elapsed = time.monotonic() - pool_prepare_started
             search_started = time.monotonic()
-            search_deadline = search_started + SEED_OPTIMIZER_TIME_BUDGET_SECONDS
+            search_deadline = search_started + optimizer_time_budget
             if deadline_monotonic is not None:
                 search_deadline = min(search_deadline, deadline_monotonic)
 
@@ -936,57 +1202,97 @@ def build_submission(
             )
             if exploration_enabled:
                 exploration_started = time.monotonic()
-                exploration_deadline = (
-                    exploration_started
-                    + EXPLORATION_OPTIMIZER_TIME_BUDGET_SECONDS
-                )
-                if deadline_monotonic is not None:
-                    exploration_deadline = min(
-                        exploration_deadline,
-                        deadline_monotonic,
-                    )
                 baseline_proxy = float(
                     optimizer_diagnostics["optimized"]["proxy_score"]
                 )
-                explored, exploration_diagnostics = optimize_all_hdr_selection(
-                    pools=exploration_pools,
-                    legacy_selection=optimized,
-                    target_count=target_count,
-                    active_mutations=active_mutations,
-                    cas_systems=cas_systems,
-                    mutation_weights=mutation_weights,
-                    minority_shares=_profiled_share_grid(
-                        exploration_profile,
-                        lower_thousandths=140,
-                        upper_thousandths=400,
-                        baseline=tuple(
-                            value / 100 for value in range(14, 37)
-                        )
-                        + (0.40,),
-                    ),
-                    primary_cas_shares=_profiled_share_grid(
-                        exploration_profile,
-                        lower_thousandths=500,
-                        upper_thousandths=700,
-                        baseline=tuple(
-                            value / 1000 for value in range(500, 701, 25)
+
+                def run_exploration_search(
+                    pools: dict[tuple[str, str, str], list[SeedCandidate]],
+                    legacy: list[SeedCandidate],
+                    profile_key: str,
+                ) -> tuple[list[SeedCandidate], dict[str, Any]]:
+                    search_deadline = (
+                        time.monotonic()
+                        + EXPLORATION_OPTIMIZER_TIME_BUDGET_SECONDS
+                    )
+                    if deadline_monotonic is not None:
+                        search_deadline = min(search_deadline, deadline_monotonic)
+                    return optimize_all_hdr_selection(
+                        pools=pools,
+                        legacy_selection=legacy,
+                        target_count=target_count,
+                        active_mutations=active_mutations,
+                        cas_systems=cas_systems,
+                        mutation_weights=mutation_weights,
+                        minority_shares=_profiled_share_grid(
+                            profile_key,
+                            lower_thousandths=140,
+                            upper_thousandths=400,
+                            baseline=tuple(
+                                value / 100 for value in range(14, 37)
+                            )
+                            + (0.40,),
                         ),
-                    ),
-                    greedy_plan_limit=12,
-                    deadline_monotonic=exploration_deadline,
+                        primary_cas_shares=_profiled_share_grid(
+                            profile_key,
+                            lower_thousandths=500,
+                            upper_thousandths=700,
+                            baseline=tuple(
+                                value / 1000 for value in range(500, 701, 25)
+                            ),
+                        ),
+                        greedy_plan_limit=12,
+                        deadline_monotonic=search_deadline,
+                    )
+
+                common_profile_key = "|".join(
+                    (COMMON_CHAMPION_PROFILE_VERSION, "baseline")
                 )
+                common_explored, common_diagnostics = run_exploration_search(
+                    common_exploration_pools,
+                    optimized,
+                    common_profile_key,
+                )
+                common_proxy = float(
+                    common_diagnostics["optimized"]["proxy_score"]
+                )
+                common_accepted = common_proxy > baseline_proxy + 1e-12
+                if common_accepted:
+                    optimized = common_explored
+
+                residual_diagnostics: dict[str, Any] | None = None
+                residual_baseline_proxy = common_proxy if common_accepted else baseline_proxy
+                residual_accepted = False
+                if exploration_profile:
+                    residual_explored, residual_diagnostics = run_exploration_search(
+                        exploration_pools,
+                        optimized,
+                        search_profile,
+                    )
+                    residual_proxy = float(
+                        residual_diagnostics["optimized"]["proxy_score"]
+                    )
+                    residual_accepted = (
+                        residual_proxy > residual_baseline_proxy + 1e-12
+                    )
+                    if residual_accepted:
+                        optimized = residual_explored
+
                 explored_proxy = float(
-                    exploration_diagnostics["optimized"]["proxy_score"]
+                    score_selection(
+                        optimized,
+                        active_mutations=active_mutations,
+                        cas_systems=cas_systems,
+                    )["proxy_score"]
                 )
-                exploration_accepted = (
-                    explored_proxy > baseline_proxy + 1e-12
-                )
+                exploration_accepted = common_accepted or residual_accepted
                 if exploration_accepted:
-                    optimized = explored
                     optimizer_diagnostics["accepted"] = True
-                    optimizer_diagnostics["optimized"] = exploration_diagnostics[
-                        "optimized"
-                    ]
+                    optimizer_diagnostics["optimized"] = score_selection(
+                        optimized,
+                        active_mutations=active_mutations,
+                        cas_systems=cas_systems,
+                    )
                     optimizer_diagnostics["proxy_improvement"] = (
                         explored_proxy
                         - float(optimizer_diagnostics["legacy"]["proxy_score"])
@@ -994,22 +1300,43 @@ def build_submission(
                 optimizer_diagnostics["exploration"] = {
                     "enabled": True,
                     "profile_id": exploration_profile_id,
+                    "common_profile_ids": list(common_profile_ids),
+                    "residual_profile_enabled": bool(exploration_profile),
                     "accepted": exploration_accepted,
                     "baseline_proxy_score": baseline_proxy,
                     "explored_proxy_score": explored_proxy,
                     "proxy_improvement_over_baseline": (
                         explored_proxy - baseline_proxy
                     ),
-                    "pool_limit_per_bucket": EXPLORATION_POOL_PER_BUCKET,
+                    "pool_limit_per_bucket": CHAMPION_POOL_PER_BUCKET,
                     "score_leaders_per_bucket": (
-                        EXPLORATION_SCORE_LEADERS_PER_BUCKET
+                        CHAMPION_SCORE_LEADERS_PER_BUCKET
                     ),
                     "pool_composition": exploration_pool_diagnostics,
+                    "common_pool_composition": common_pool_diagnostics,
                     "new_valid_candidates": exploration_candidates_added,
                     "new_all_hdr_candidates": (
                         exploration_all_hdr_candidates_added
                     ),
-                    "search": exploration_diagnostics,
+                    "search": residual_diagnostics or common_diagnostics,
+                    "common": {
+                        "accepted": common_accepted,
+                        "baseline_proxy_score": baseline_proxy,
+                        "explored_proxy_score": common_proxy,
+                        "search": common_diagnostics,
+                    },
+                    "residual": (
+                        {
+                            "accepted": residual_accepted,
+                            "baseline_proxy_score": residual_baseline_proxy,
+                            "explored_proxy_score": float(
+                                residual_diagnostics["optimized"]["proxy_score"]
+                            ),
+                            "search": residual_diagnostics,
+                        }
+                        if residual_diagnostics is not None
+                        else None
+                    ),
                     "elapsed_seconds": time.monotonic() - exploration_started,
                 }
             search_elapsed = time.monotonic() - search_started
@@ -1018,7 +1345,11 @@ def build_submission(
             optimizer_diagnostics = {
                 "objective_version": "stage2-x-stage5-v1",
                 "accepted": False,
-                "skip_reason": "legacy_selection_not_all_hdr",
+                "skip_reason": (
+                    "managed_consistency_target"
+                    if managed_consistency_target is not None
+                    else "legacy_selection_not_all_hdr"
+                ),
             }
         optimizer_diagnostics["pool_prepare_elapsed_seconds"] = pool_prepare_elapsed
         optimizer_diagnostics["search_elapsed_seconds"] = search_elapsed
@@ -1035,6 +1366,20 @@ def build_submission(
         )
         optimizer_diagnostics["fallback_row_count"] = fallback_row_count
 
+    if (
+        maximum_candidate_for_optimizer is not None
+        and consistency_candidate_submissions is not None
+    ):
+        for index, (label, _candidate) in enumerate(
+            consistency_candidate_submissions
+        ):
+            if label == "max-score-fallback":
+                consistency_candidate_submissions[index] = (
+                    label,
+                    list(selected),
+                )
+                break
+
     diagnostics = {
         "target_count": target_count,
         "selected_count": len(selected),
@@ -1044,8 +1389,26 @@ def build_submission(
         "exploration": {
             "enabled": exploration_enabled,
             "profile_id": exploration_profile_id,
+            "common_profile_ids": list(common_profile_ids),
+            "residual_profile_enabled": bool(exploration_profile),
         },
         "round_seeds": list(round_seeds or []),
+        "consistency_control": {
+            "enabled": managed_consistency_target is not None,
+            "target_consistency": managed_consistency_target,
+            "partial_seed_anchor": PARTIAL_SEED_ANCHOR,
+            "all_seed_hdr_share": (
+                all_seed_hdr_share_for_target(managed_consistency_target)
+                if managed_consistency_target is not None
+                else None
+            ),
+            "bucket_mix": managed_bucket_mix,
+            "candidate_mix": consistency_candidate_mix,
+        },
+        "seed_latency_profile": {
+            "focused_variants_per_anchor": focused_variant_limit,
+            "optimizer_time_budget_seconds": optimizer_time_budget,
+        },
         "focused_candidates_added": focused_candidates_added,
         "exploration_candidates_added": exploration_candidates_added,
         "exploration_all_hdr_candidates_added": (

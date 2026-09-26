@@ -1,4 +1,5 @@
 from niome_subnet.genomics.submission_builder import (
+    COMMON_CHAMPION_PROFILES,
     EXPLORATION_GRID_STEP_THOUSANDTHS,
     EXPLORATION_VARIANTS_PER_ANCHOR,
     GUIDE_VARIANTS_PER_TARGET,
@@ -91,11 +92,7 @@ def test_focused_variant_reservoir_is_wide_bounded_and_deterministic():
 
 
 def test_live_exploration_profiles_open_distinct_candidate_reservoirs():
-    profiles = (
-        "5Cd42XsDyg9QGovQKCVffbd2nk6cpfQbsCLZo4FF2fhLoveS",
-        "5EFDuGe2nXZfb3cRG1K8KTs6ihePcMMUCsSJdcn9fLaaW6mT",
-        "5ES1fyTQdvQjtmGokDSsb3fw2MyvzygAQ1oiRKiy9MDJwqKU",
-    )
+    profiles = COMMON_CHAMPION_PROFILES
     reservoirs = {
         tuple(
             _focused_guide_variants(

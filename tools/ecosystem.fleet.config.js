@@ -3,10 +3,13 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const python = path.join(root, ".venv", "bin", "python");
 const externalIp = process.env.NIOME_EXTERNAL_IP || "69.30.204.53";
+const walletPath = "/home/administrator/.bittensor/wallets/main";
 
 const lanes = [
   {
     id: "dollar1",
+    wallet: "main3",
+    hotkey: "bitcoin1",
     miner: "niome-dollar1",
     bridge: "niome-seed-bridge",
     port: 8091,
@@ -15,27 +18,33 @@ const lanes = [
   },
   {
     id: "dollar2",
+    wallet: "main3",
+    hotkey: "bitcoin2",
     miner: "niome-dollar2",
     bridge: "niome-seed-bridge-dollar2",
     port: 8092,
     artifactRoot: path.join(root, "artifacts", "miners", "dollar2"),
-    explorationProfile: "5Cd42XsDyg9QGovQKCVffbd2nk6cpfQbsCLZo4FF2fhLoveS",
+    explorationProfile: "5H1jPksvzJuak6P63VAp7QttcRpQ1PuT9BNDyMT3qGEYovdQ",
   },
   {
     id: "dollar3",
+    wallet: "main4",
+    hotkey: "hype1",
     miner: "niome-dollar3",
     bridge: "niome-seed-bridge-dollar3",
     port: 8093,
     artifactRoot: path.join(root, "artifacts", "miners", "dollar3"),
-    explorationProfile: "5EFDuGe2nXZfb3cRG1K8KTs6ihePcMMUCsSJdcn9fLaaW6mT",
+    explorationProfile: "5EeqkTcDzGg7Ge89N1DJzQv5ehyCEPMBreCHqcxfEpB3WU21",
   },
   {
     id: "dollar4",
+    wallet: "main4",
+    hotkey: "hype2",
     miner: "niome-dollar4",
     bridge: "niome-seed-bridge-dollar4",
     port: 8094,
     artifactRoot: path.join(root, "artifacts", "miners", "dollar4"),
-    explorationProfile: "5ES1fyTQdvQjtmGokDSsb3fw2MyvzygAQ1oiRKiy9MDJwqKU",
+    explorationProfile: "5HKLhT3ie4VkW9hG3Vgn2MiYgZ9PQtVnFbJ18fmDh5ZkWY86",
   },
 ];
 
@@ -65,8 +74,9 @@ const minerApps = lanes.map((lane) => ({
     "neurons/miner.py",
     "--netuid 55",
     "--network finney",
-    "--wallet main",
-    `--wallet-hotkey ${lane.id}`,
+    `--wallet ${lane.wallet}`,
+    `--wallet-hotkey ${lane.hotkey}`,
+    `--wallet-path ${walletPath}`,
     `--axon.port ${lane.port}`,
     `--axon.external-ip ${externalIp}`,
     "--blacklist.force_validator_permit",

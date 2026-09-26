@@ -82,12 +82,19 @@ def add_args(cls, parser):
     """
     parser.add_argument("--wallet", type=str, help="Wallet name", default="default")
     parser.add_argument("--wallet-hotkey", type=str, help="Wallet hotkey name", default="default")
+    parser.add_argument(
+        "--wallet-path",
+        type=str,
+        help="Root directory containing Bittensor wallet directories",
+        default=os.path.expanduser("~/.bittensor/wallets"),
+    )
     parser.add_argument("--network", type=str, help="Bittensor network (finney/test/local)", default="finney")
     parser.add_argument("--endpoint", type=str, help="Subtensor websocket endpoint", default=None)
 
     # Legacy v10 aliases — silently map to the new flags
     parser.add_argument("--wallet.name", dest="wallet", help=argparse.SUPPRESS)
     parser.add_argument("--wallet.hotkey", dest="wallet_hotkey", help=argparse.SUPPRESS)
+    parser.add_argument("--wallet.path", dest="wallet_path", help=argparse.SUPPRESS)
     parser.add_argument("--subtensor.network", dest="network", help=argparse.SUPPRESS)
     parser.add_argument("--subtensor.chain_endpoint", dest="endpoint", help=argparse.SUPPRESS)
     parser.add_argument("--logging.debug", dest="_logging_debug", action="store_true", help=argparse.SUPPRESS)
