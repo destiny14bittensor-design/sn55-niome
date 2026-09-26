@@ -36,7 +36,9 @@ bridge exact-replays managed candidates, rejects the maximum-score candidate,
 and will leave the safe object untouched if it cannot verify a managed result
 below the cold-start ceiling. After three rounds, the existing history-derived
 target may activate; out-of-band estimates are clamped to `0.79..0.85` instead
-of jumping to `1.0`.
+of jumping to `1.0`. All enabled targeting modes use the same exact-selection
+band and exclude the consistency-`1.0` fallback, including under replay-time
+pressure.
 
 ## 2026-09-26 verified chain-seed cutover
 

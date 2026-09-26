@@ -74,9 +74,8 @@ CONSISTENCY_HISTORY_LIMIT = 5
 CONSISTENCY_SCORE_TIMEOUT_SECONDS = 10.0
 CONSISTENCY_REPLAY_BUDGET_SECONDS = 45.0
 CONSISTENCY_UPLOAD_RESERVE_SECONDS = 75.0
-CONSISTENCY_MIN_REPLAY_SECONDS = 30.0
-COLD_START_MIN_EXACT_CONSISTENCY = 0.79
-COLD_START_MAX_EXACT_CONSISTENCY = 0.85
+PREFERRED_MIN_EXACT_CONSISTENCY = 0.79
+PREFERRED_MAX_EXACT_CONSISTENCY = 0.85
 SEED_AUTHORITY_EPOCH = "late-contract-random-v1"
 POLL_SECONDS = 2.0
 CONTRACT_POLL_SECONDS = 6.0
@@ -1132,52 +1131,22 @@ def _handle_envelope(envelope_path: Path) -> None:
                     - CONSISTENCY_UPLOAD_RESERVE_SECONDS,
                 ),
             )
-            if (
-                replay_budget < CONSISTENCY_MIN_REPLAY_SECONDS
-                and not consistency_decision.cold_start
-            ):
-                fallback = next(
-                    candidate
-                    for label, candidate in consistency_candidates
-                    if label == "max-score-fallback"
-                )
-                submission = fallback
-                exact_search = {
-                    "enabled": False,
-                    "skip_reason": "insufficient_pre_validation_time",
-                    "target_consistency": (
-                        consistency_decision.target_consistency
-                    ),
-                    "estimated_seconds_to_validation": (
-                        estimated_seconds_to_validation
-                    ),
-                    "required_upload_reserve_seconds": (
-                        CONSISTENCY_UPLOAD_RESERVE_SECONDS
-                    ),
-                    "selected_label": "max-score-fallback",
-                    "fallback_used": True,
-                }
-            else:
-                submission, exact_search = _choose_exact_consistency_candidate(
-                    candidates=consistency_candidates,
-                    artifacts=artifacts,
-                    seeds=seeds,
-                    target_consistency=(
-                        consistency_decision.target_consistency
-                    ),
-                    budget_seconds=replay_budget,
-                    allow_max_score_fallback=not consistency_decision.cold_start,
-                    minimum_consistency=(
-                        COLD_START_MIN_EXACT_CONSISTENCY
-                        if consistency_decision.cold_start
-                        else None
-                    ),
-                    maximum_consistency=(
-                        COLD_START_MAX_EXACT_CONSISTENCY
-                        if consistency_decision.cold_start
-                        else None
-                    ),
-                )
+            submission, exact_search = _choose_exact_consistency_candidate(
+                candidates=consistency_candidates,
+                artifacts=artifacts,
+                seeds=seeds,
+                target_consistency=consistency_decision.target_consistency,
+                budget_seconds=replay_budget,
+                allow_max_score_fallback=False,
+                minimum_consistency=PREFERRED_MIN_EXACT_CONSISTENCY,
+                maximum_consistency=PREFERRED_MAX_EXACT_CONSISTENCY,
+            )
+            exact_search["estimated_seconds_to_validation"] = (
+                estimated_seconds_to_validation
+            )
+            exact_search["required_upload_reserve_seconds"] = (
+                CONSISTENCY_UPLOAD_RESERVE_SECONDS
+            )
             diagnostics["exact_consistency_search"] = exact_search
             consistency_control["exact_search"] = exact_search
             diagnostics["selected_count"] = len(submission)
