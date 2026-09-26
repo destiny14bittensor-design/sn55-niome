@@ -1,5 +1,13 @@
 # SN55 NIOME 세션 인수인계 — 2026-09-26
 
+> **후속 정정:** 이 문서 작성 뒤 validator가 late-stamped random contract seed
+> 방식으로 돌아간 사실이 공식 task/score exact replay로 확인되었다. 따라서 아래의
+> chain-authoritative 결론은 현재 운영에 적용하지 않는다. bridge는 원본 signed
+> `contract_url`을 polling하여 `seed: 0`이 실제 seed로 바뀐 뒤에만 최적화 PUT을
+> 완성하며, consistency history는 `contract-authoritative` exact-match 라운드만
+> 인정한다. 상세 근거는 `docs/seed_transition_architecture.md`의 최신 최상단 절을
+> 따른다.
+
 ## 1. 목적과 현재 결론
 
 이 문서는 2026-09-26 세션에서 수행한 SN55 NIOME 마이너, live seed bridge,

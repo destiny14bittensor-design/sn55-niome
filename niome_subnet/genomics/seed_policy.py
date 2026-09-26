@@ -90,7 +90,6 @@ class SeedPlan:
             in {
                 "contract-authoritative",
                 "supplied-authoritative",
-                "chain-authoritative",
             }
             else "ranked"
         )
@@ -108,7 +107,6 @@ def resolve_seed_plan(
     *,
     supplied_seeds: Iterable[int] | None = None,
     trust_supplied_seeds: bool = False,
-    prefer_supplied_seeds: bool = False,
     accept_zero_contract_seed: bool = False,
 ) -> SeedPlan:
     """Choose authoritative legacy seeds or a quarantine-safe stress ensemble."""
@@ -120,19 +118,6 @@ def resolve_seed_plan(
         contract_seeds = []
         contract_seed_error = str(error)
     supplied = parse_seed_values(list(supplied_seeds or ()))
-
-    if supplied and trust_supplied_seeds and prefer_supplied_seeds:
-        return SeedPlan(
-            mode="chain-authoritative",
-            source="finalized-block-hashes",
-            optimization_seeds=tuple(supplied),
-            evaluation_seeds=tuple(supplied),
-            holdout_seeds=tuple(),
-            comparable_to_official=True,
-            contract_seed_raw=raw,
-            supplied_seeds=tuple(supplied),
-            reason="validator-compatible finalized block-hash seeds override the task seed",
-        )
 
     contract_is_placeholder = contract_seeds == [0] and not accept_zero_contract_seed
     if contract_seeds and not contract_is_placeholder:
@@ -164,7 +149,10 @@ def resolve_seed_plan(
             comparable_to_official=False,
             contract_seed_raw=raw,
             supplied_seeds=tuple(supplied),
-            reason="operator explicitly enabled provisional/block-derived seeds",
+            reason=(
+                "operator explicitly enabled provisional/block-derived seeds; "
+                "they never override contract seeds as officially comparable"
+            ),
         )
 
     excluded = set(contract_seeds) | set(supplied)

@@ -52,19 +52,18 @@ def test_provisional_seeds_require_an_explicit_trust_switch():
     assert plan.comparable_to_official is False
 
 
-def test_finalized_chain_seeds_override_a_nonzero_contract_seed():
+def test_supplied_seeds_never_override_nonzero_contract_seeds():
     plan = resolve_seed_plan(
         {"seed": "654,347,964"},
         "task-chain",
         supplied_seeds=[343, 783, 871],
         trust_supplied_seeds=True,
-        prefer_supplied_seeds=True,
     )
 
-    assert plan.mode == "chain-authoritative"
-    assert plan.source == "finalized-block-hashes"
-    assert plan.optimization_seeds == (343, 783, 871)
-    assert plan.evaluation_seeds == (343, 783, 871)
+    assert plan.mode == "contract-authoritative"
+    assert plan.source == "contract"
+    assert plan.optimization_seeds == (654, 347, 964)
+    assert plan.evaluation_seeds == (654, 347, 964)
     assert plan.selection_profile == "seed-aware"
     assert plan.contract_seed_raw == "654,347,964"
     assert plan.comparable_to_official is True

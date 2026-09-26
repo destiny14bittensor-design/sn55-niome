@@ -1,5 +1,38 @@
 # Seed-generation transition architecture
 
+## 2026-09-26 late-contract rollback confirmed
+
+This section supersedes the chain-authoritative cutover section below. The
+validator used block-derived seeds for tasks `9c2d620b` and `b18e7599`, but it
+subsequently returned to backend-generated seeds that are stamped into the
+original signed contract object shortly before validation.
+
+For task `cb53c30c`, the bridge derived chain seeds `912,567,840`, while the
+official task later published `999,668,630`. Replaying the exact uploaded bridge
+objects on `999,668,630` reproduced the official scores bit-for-bit. For
+example, bitcoin1 changed from the incorrect chain-seed estimate
+`212.72505449724758` (consistency `1.0`) to the official
+`19.55231054838751` (consistency `0.09191352938936721`) without changing the
+weighted score or fidelity. This proves that the mismatch was exclusively the
+seed source.
+
+The live bridge therefore follows the legacy late-contract lifecycle again:
+
+1. Open two independent slow PUTs while the miner uploads the safe object.
+2. Poll the original signed `contract_url` while its seed remains `0`.
+3. Accept only a non-placeholder seed from that same signed contract.
+4. Build and exact-replay against those contract seeds.
+5. Complete one surviving PUT; if seeds never appear or both streams fail,
+   leave the safe object untouched.
+
+Block-derived seeds are never officially comparable and never override a
+non-placeholder contract seed. Consistency history now accepts only completed
+`contract-authoritative` rounds whose local score appears exactly in the
+official scoreboard. Fewer than three such rounds intentionally select the
+consistency-`1.0` exact-seed fallback; after three rounds, the existing
+history-derived target (currently expected near the leaders' `0.81..0.84`
+range) may activate.
+
 ## 2026-09-26 verified chain-seed cutover
 
 This section supersedes the legacy contract-authoritative guidance below. Live

@@ -1,10 +1,12 @@
 import json
 import os
+import threading
 import time
 
 import pytest
 
 import tools.live_seed_bridge as bridge_module
+from tools.local_validator.artifacts import ArtifactBundle
 from tools.live_seed_bridge import (
     SlowPut,
     _assert_contract_seed_only_changed,
@@ -18,13 +20,14 @@ from tools.live_seed_bridge import (
     _standby_start_delay,
     _submission_tail,
     _timing_probe,
+    _wait_for_authoritative_contract_seed,
 )
 
 
-def test_consistency_history_accepts_only_chain_authoritative_exact_replay():
+def test_consistency_history_accepts_only_contract_authoritative_exact_replay():
     payload = {
         "comparable_to_official": True,
-        "seed_policy": {"mode": "chain-authoritative"},
+        "seed_policy": {"mode": "contract-authoritative"},
         "breakdown": {
             "total_weighted_score": 300.0,
             "distribution_fidelity_factor": 0.9,
@@ -37,7 +40,7 @@ def test_consistency_history_accepts_only_chain_authoritative_exact_replay():
     assert accepted.baseline_score == pytest.approx(270.0)
     assert accepted.normalized_top == pytest.approx(0.70)
 
-    payload["seed_policy"]["mode"] = "contract-authoritative"
+    payload["seed_policy"]["mode"] = "chain-authoritative"
     assert _consistency_sample_from_payload("task", payload, 189.0) is None
 
 
@@ -130,6 +133,59 @@ def test_refreshed_contract_may_change_only_the_seed():
     refreshed["rules"]["max_experiments"] = 500
     with pytest.raises(ValueError, match="other than seed"):
         _assert_contract_seed_only_changed(original, refreshed)
+
+
+def test_wait_for_authoritative_contract_seed_ignores_placeholder_then_returns(
+    tmp_path, monkeypatch
+):
+    artifacts = ArtifactBundle(
+        contract={"seed": 0, "version": "v1"},
+        hbb_reference={},
+        chromosome_11="A",
+        cell_types={},
+        manifest={},
+    )
+    responses = iter(
+        [
+            {"seed": 0, "version": "v1"},
+            {"seed": "999,668,630", "version": "v1"},
+        ]
+    )
+
+    monkeypatch.setattr(
+        bridge_module,
+        "_fetch_refreshed_contract",
+        lambda _task_dir: next(responses),
+    )
+    monkeypatch.setattr(bridge_module.time, "sleep", lambda _seconds: None)
+
+    class FakeBridge:
+        label = "64kib-primary"
+        done = threading.Event()
+
+        @staticmethod
+        def snapshot():
+            return {"label": "64kib-primary", "state": "streaming"}
+
+    state = {}
+    refreshed, seed_plan = _wait_for_authoritative_contract_seed(
+        task_dir=tmp_path,
+        artifacts=artifacts,
+        bridges=[FakeBridge()],
+        state=state,
+        status_path=tmp_path / "seed_bridge_status.json",
+        events_path=tmp_path / "seed_bridge_events.jsonl",
+    )
+
+    assert refreshed.contract["seed"] == "999,668,630"
+    assert seed_plan.mode == "contract-authoritative"
+    assert seed_plan.optimization_seeds == (999, 668, 630)
+    assert json.loads((tmp_path / "refreshed_contract.json").read_text())["seed"] == (
+        "999,668,630"
+    )
+    assert "authoritative_contract_seed_observed" in (
+        tmp_path / "seed_bridge_events.jsonl"
+    ).read_text()
 
 
 def test_submission_tail_completes_streamed_json_list():

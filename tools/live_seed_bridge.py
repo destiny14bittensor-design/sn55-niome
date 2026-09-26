@@ -1,12 +1,12 @@
-"""Keep a live S3 PUT open until NIOME's chain-derived round seeds exist.
+"""Keep a live S3 PUT open until NIOME publishes the task's real seeds.
 
 The validator's ordinary miner process remains the reliability path: it writes a
 baseline object promptly.  This sidecar opens several PUT profiles while the
-presigned URL is valid and streams JSON whitespace to keep them alive.  The
-authoritative seeds are derived from finalized round block hashes exactly like
-the validator; the task contract seed is retained only as forensic telemetry.
-S3 object replacement is atomic, so failed or cancelled bridges leave the
-already completed baseline object in place.
+presigned URL is valid and streams JSON whitespace to keep them alive.  It
+polls the original signed contract object until the backend replaces the
+placeholder seed with the validator's random seed set.  S3 object replacement
+is atomic, so failed or cancelled bridges leave the already completed baseline
+object in place.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from niome_subnet.miner.task_processor import (
     _presigned_url_deadline,
 )
 from niome_subnet.utils.misc import FINALITY_LAG
-from niome_subnet.utils.seeds import seed_blocks, seeds_from_block_hashes
+from niome_subnet.utils.seeds import seed_blocks
 from niome_subnet.utils.settings import (
     CHR11_PATH,
     MINER_SCORE_URL,
@@ -64,7 +64,7 @@ logger = logging.getLogger("niome_seed_bridge")
 
 ARTIFACT_ROOT = Path(os.getenv("NIOME_ARTIFACT_ROOT", "artifacts/live"))
 EXPLORATION_PROFILE = os.getenv("NIOME_EXPLORATION_PROFILE", "").strip() or None
-OBSERVE_CHAIN_SEEDS_ONLY = os.getenv(
+OBSERVE_ONLY = os.getenv(
     "NIOME_BRIDGE_OBSERVE_ONLY", ""
 ).strip().lower() in {"1", "true", "yes"}
 CONSISTENCY_CONTROL_ENABLED = os.getenv(
@@ -250,12 +250,12 @@ def _consistency_sample_from_payload(
     local_payload: dict[str, Any],
     top_score: float,
 ) -> ConsistencySample | None:
-    """Accept only exact, chain-authoritative completed-round replays."""
+    """Accept only exact, contract-authoritative completed-round replays."""
     seed_policy = local_payload.get("seed_policy")
     breakdown = local_payload.get("breakdown")
     if not isinstance(seed_policy, dict) or not isinstance(breakdown, dict):
         return None
-    if seed_policy.get("mode") != "chain-authoritative":
+    if seed_policy.get("mode") != "contract-authoritative":
         return None
     if not bool(local_payload.get("comparable_to_official")):
         return None
@@ -304,7 +304,10 @@ def _resolve_live_consistency_decision(
         if not isinstance(local_payload, dict):
             continue
         seed_policy = local_payload.get("seed_policy")
-        if not isinstance(seed_policy, dict) or seed_policy.get("mode") != "chain-authoritative":
+        if (
+            not isinstance(seed_policy, dict)
+            or seed_policy.get("mode") != "contract-authoritative"
+        ):
             continue
         local_score = local_payload.get("final_score")
         if not isinstance(local_score, (int, float)):
@@ -967,126 +970,46 @@ def _handle_envelope(envelope_path: Path) -> None:
         )
         subtensor = bt.Subtensor(network="finney")
         current_block = int(subtensor.block)
-        round_start, round_seed_blocks, seed_finality_block, validation_block = (
-            _round_coordinates(current_block)
-        )
-        wait_started_at = time.monotonic()
-        wait_started_block = current_block
-        observed_seconds_per_block: float | None = None
-        seed_read_target_block = (
-            seed_finality_block
-            if OBSERVE_CHAIN_SEEDS_ONLY
-            else round_seed_blocks[-1]
-        )
-        waiting_state = (
-            "waiting_for_seed_finality"
-            if OBSERVE_CHAIN_SEEDS_ONLY
-            else "waiting_for_seed_blocks"
-        )
+        round_start, _, _, validation_block = _round_coordinates(current_block)
         state.update(
             {
-                "state": waiting_state,
+                "state": "waiting_for_contract_seed",
                 "bridge_mode": (
-                    "observe-chain-seeds" if OBSERVE_CHAIN_SEEDS_ONLY else "submit-chain-seeds"
+                    "observe-contract-seeds" if OBSERVE_ONLY else "submit-contract-seeds"
                 ),
-                "contract_seed_telemetry": artifacts.contract.get("seed"),
+                "initial_contract_seed": artifacts.contract.get("seed"),
                 "current_block_at_open": current_block,
                 "round_start_block": round_start,
-                "seed_blocks": round_seed_blocks,
-                "seed_finality_block": seed_finality_block,
-                "seed_read_target_block": seed_read_target_block,
                 "validation_block": validation_block,
             }
         )
         _write_json(bridge_status_path, state)
         _append_event(
             bridge_events_path,
-            waiting_state,
+            "contract_seed_resolution_started",
             current_block=current_block,
             round_start_block=round_start,
-            seed_blocks=round_seed_blocks,
-            seed_finality_block=seed_finality_block,
-            seed_read_target_block=seed_read_target_block,
             validation_block=validation_block,
-            contract_seed_telemetry=artifacts.contract.get("seed"),
+            initial_contract_seed=artifacts.contract.get("seed"),
         )
-        last_live_labels: tuple[str, ...] | None = None
-        while current_block < seed_read_target_block:
-            live_labels = tuple(
-                bridge.label for bridge in bridges if not bridge.done.is_set()
-            )
-            if not live_labels:
-                raise RuntimeError(
-                    "all slow PUT profiles stopped before the seed read target: "
-                    f"{[bridge.snapshot() for bridge in bridges]}"
-                )
-            elapsed = time.monotonic() - wait_started_at
-            advanced = current_block - wait_started_block
-            if advanced > 0:
-                observed_seconds_per_block = elapsed / advanced
-            snapshots = [bridge.snapshot() for bridge in bridges]
-            state.update(
-                {
-                    "last_observed_at": _utc_now(),
-                    "current_block": current_block,
-                    "observed_seconds_per_block": observed_seconds_per_block,
-                    "stream_results": snapshots,
-                }
-            )
-            if live_labels != last_live_labels:
-                state.update(
-                    {
-                        "live_stream_profiles": list(live_labels),
-                        "stopped_streams": [
-                            bridge.snapshot()
-                            for bridge in bridges
-                            if bridge.done.is_set()
-                        ],
-                    }
-                )
-                _append_event(
-                    bridge_events_path,
-                    "stream_set_changed",
-                    current_block=current_block,
-                    live_stream_profiles=list(live_labels),
-                    streams=snapshots,
-                )
-                last_live_labels = live_labels
-            _write_json(bridge_status_path, state)
-            time.sleep(6)
-            current_block = int(subtensor.block)
 
-        elapsed = time.monotonic() - wait_started_at
-        advanced = current_block - wait_started_block
-        if advanced > 0:
-            observed_seconds_per_block = elapsed / advanced
-        block_hashes = [
-            str(subtensor.block_info(block).hash) for block in round_seed_blocks
-        ]
-        chain_seeds = seeds_from_block_hashes(block_hashes)
-        seed_plan = resolve_seed_plan(
-            artifacts.contract,
-            task_dir.name,
-            supplied_seeds=chain_seeds,
-            trust_supplied_seeds=True,
-            prefer_supplied_seeds=True,
-        )
-        seed_block = current_block
-        state["chain_seed_proof"] = {
-            "round_start_block": round_start,
-            "seed_blocks": round_seed_blocks,
-            "block_hashes": block_hashes,
-            "seeds": chain_seeds,
-            "observed_at_block": current_block,
-            "finality_depth": current_block - round_seed_blocks[-1],
-            "finality_confirmed": current_block >= seed_finality_block,
-        }
+        seed_plan = resolve_seed_plan(artifacts.contract, task_dir.name)
+        if seed_plan.mode != "contract-authoritative":
+            artifacts, seed_plan = _wait_for_authoritative_contract_seed(
+                task_dir=task_dir,
+                artifacts=artifacts,
+                bridges=bridges,
+                state=state,
+                status_path=bridge_status_path,
+                events_path=bridge_events_path,
+            )
+        seed_observed_block = int(subtensor.block)
 
         seeds = list(seed_plan.optimization_seeds)
         state.update(
             {
                 "state": "building",
-                "seed_read_block": seed_block,
+                "seed_read_block": seed_observed_block,
                 "round_seeds": seeds,
                 "seed_policy": seed_plan.as_dict(),
                 "build_started_at": _utc_now(),
@@ -1095,8 +1018,8 @@ def _handle_envelope(envelope_path: Path) -> None:
         _write_json(bridge_status_path, state)
         _append_event(
             bridge_events_path,
-            "seeds_available",
-            seed_read_block=seed_block,
+            "authoritative_contract_seeds_available",
+            seed_read_block=seed_observed_block,
             round_seeds=seeds,
             seed_policy=seed_plan.as_dict(),
             streams=[bridge.snapshot() for bridge in bridges],
@@ -1137,7 +1060,7 @@ def _handle_envelope(envelope_path: Path) -> None:
         )
         if consistency_decision.target_consistency is not None:
             block_after_build = int(subtensor.block)
-            seconds_per_block = observed_seconds_per_block or 12.0
+            seconds_per_block = 12.0
             estimated_seconds_to_validation = max(
                 0.0,
                 (validation_block - block_after_build) * seconds_per_block,
@@ -1203,7 +1126,7 @@ def _handle_envelope(envelope_path: Path) -> None:
         ).encode()
         submission_artifact = (
             "seed_bridge_observation_submission.json"
-            if OBSERVE_CHAIN_SEEDS_ONLY
+            if OBSERVE_ONLY
             else "seed_bridge_submission.json"
         )
         (task_dir / submission_artifact).write_bytes(submission_raw)
@@ -1212,7 +1135,7 @@ def _handle_envelope(envelope_path: Path) -> None:
             {
                 "state": (
                     "observation_build_complete"
-                    if OBSERVE_CHAIN_SEEDS_ONLY
+                    if OBSERVE_ONLY
                     else "finishing_upload"
                 ),
                 "build_elapsed_seconds": time.monotonic() - build_started,
@@ -1229,44 +1152,12 @@ def _handle_envelope(envelope_path: Path) -> None:
             submission_rows=len(submission),
             submission_sha256=state["submission_sha256"],
         )
-        if not OBSERVE_CHAIN_SEEDS_ONLY:
-            current_block = int(subtensor.block)
-            while current_block < seed_finality_block:
-                if not any(not bridge.done.is_set() for bridge in bridges):
-                    raise RuntimeError(
-                        "all slow PUT profiles stopped before seed finality confirmation"
-                    )
-                time.sleep(6)
-                current_block = int(subtensor.block)
-            confirmed_hashes = [
-                str(subtensor.block_info(block).hash) for block in round_seed_blocks
-            ]
-            if confirmed_hashes != block_hashes:
-                raise RuntimeError(
-                    "seed block hashes changed before finality; refusing optimized PUT"
-                )
-            state["chain_seed_proof"].update(
-                {
-                    "confirmed_block_hashes": confirmed_hashes,
-                    "confirmed_at_block": current_block,
-                    "finality_depth": current_block - round_seed_blocks[-1],
-                    "finality_confirmed": True,
-                }
-            )
-            state["seed_finality_confirmed_at"] = _utc_now()
-            _write_json(bridge_status_path, state)
-            _append_event(
-                bridge_events_path,
-                "seed_finality_confirmed",
-                chain_seed_proof=state["chain_seed_proof"],
-                streams=[bridge.snapshot() for bridge in bridges],
-            )
-        if OBSERVE_CHAIN_SEEDS_ONLY:
+        if OBSERVE_ONLY:
             block_after_build = int(subtensor.block)
             timing = _timing_probe(
                 current_block=block_after_build,
                 validation_block=validation_block,
-                observed_seconds_per_block=observed_seconds_per_block,
+                observed_seconds_per_block=12.0,
                 bridges=bridges,
             )
             for candidate in bridges:
@@ -1289,13 +1180,13 @@ def _handle_envelope(envelope_path: Path) -> None:
                 bridge_events_path,
                 "observation_complete_no_submission",
                 round_seeds=seeds,
-                chain_seed_proof=state["chain_seed_proof"],
+                seed_policy=seed_plan.as_dict(),
                 build_elapsed_seconds=state["build_elapsed_seconds"],
                 timing_probe=timing,
                 streams=state["stream_results"],
             )
             logger.info(
-                "Observed chain seeds for task %s without completing PUT: seeds=%s timing=%s",
+                "Observed contract seeds for task %s without completing PUT: seeds=%s timing=%s",
                 task_dir.name,
                 seeds,
                 timing,
@@ -1470,7 +1361,7 @@ def run() -> None:
         ARTIFACT_ROOT.resolve(),
         GUIDE_VARIANTS_PER_TARGET,
         PRIMARY_CAS_SHARE,
-        "observe-chain-seeds" if OBSERVE_CHAIN_SEEDS_ONLY else "submit-chain-seeds",
+        "observe-contract-seeds" if OBSERVE_ONLY else "submit-contract-seeds",
         FAST_SEED_FOCUSED_VARIANTS_PER_ANCHOR,
         FAST_SEED_OPTIMIZER_TIME_BUDGET_SECONDS,
         "common+residual" if EXPLORATION_PROFILE else "common-champion",
