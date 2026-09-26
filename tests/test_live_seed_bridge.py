@@ -132,14 +132,15 @@ def test_cold_start_exact_search_never_selects_consistency_one(monkeypatch):
         seeds=[1, 2, 3],
         target_consistency=0.85,
         allow_max_score_fallback=False,
-        maximum_consistency=0.90,
+        minimum_consistency=0.79,
+        maximum_consistency=0.85,
     )
 
-    assert selected[0]["experiment_id"] == "high"
-    assert diagnostics["selected_label"] == "managed-high"
-    assert diagnostics["selected"]["consistency_factor"] == pytest.approx(0.88)
+    assert selected[0]["experiment_id"] == "near"
+    assert diagnostics["selected_label"] == "managed-near"
+    assert diagnostics["selected"]["consistency_factor"] == pytest.approx(0.84)
     assert diagnostics["fallback_used"] is False
-    assert diagnostics["target_met"] is True
+    assert diagnostics["target_met"] is False
 
 
 def test_fetch_refreshed_contract_uses_task_url_without_persisting_it(

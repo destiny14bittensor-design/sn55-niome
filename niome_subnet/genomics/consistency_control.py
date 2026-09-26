@@ -18,7 +18,7 @@ DEFAULT_MIN_SAMPLES = 3
 DEFAULT_HISTORY_LIMIT = 5
 DEFAULT_QUANTILE = 0.80
 DEFAULT_SAFETY_MARGIN = 0.05
-DEFAULT_MIN_TARGET = 0.60
+DEFAULT_MIN_TARGET = 0.79
 DEFAULT_MAX_TARGET = 0.85
 # Optimising two of three seeds produced 0.7044 in the verified replay.  Use a
 # deliberately rounded anchor; exact replay results are retained for auditing.

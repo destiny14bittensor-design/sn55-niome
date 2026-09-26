@@ -43,9 +43,9 @@ def test_target_uses_normalized_quantile_and_safety_margin():
     # q80 is 0.724 for five linearly-interpolated samples; add a 5% margin.
     assert decision.mode == "targeted"
     assert decision.required_consistency == pytest.approx(0.7602)
-    assert decision.target_consistency == pytest.approx(0.7602)
+    assert decision.target_consistency == pytest.approx(0.79)
     assert decision.all_seed_hdr_share == pytest.approx(
-        ((0.7602 - 0.70) / 0.30) ** 0.5 + 0.05
+        ((0.79 - 0.70) / 0.30) ** 0.5 + 0.05
     )
 
 
@@ -61,8 +61,8 @@ def test_out_of_band_history_is_clamped_instead_of_selecting_one():
     assert too_high.required_consistency > 0.85
     assert too_high.target_consistency == pytest.approx(0.85)
     assert too_low.mode == "targeted"
-    assert too_low.required_consistency < 0.60
-    assert too_low.target_consistency == pytest.approx(0.60)
+    assert too_low.required_consistency < 0.79
+    assert too_low.target_consistency == pytest.approx(0.79)
 
 
 def test_full_hdr_share_is_clamped_at_both_anchors():

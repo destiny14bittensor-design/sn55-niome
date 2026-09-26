@@ -8,6 +8,7 @@
 > 인정한다. 상세 근거는 `docs/seed_transition_architecture.md`의 최신 최상단 절을
 > 따른다. 또한 새 epoch 표본이 3개 미만이면 consistency `1.0`이 아니라 cold-start
 > target `0.85`를 사용하며, exact replay된 managed 후보만 허용한다.
+> cold-start와 history 기반 target의 우선 선택 범위는 `0.79–0.85`이다.
 
 ## 1. 목적과 현재 결론
 
@@ -24,8 +25,8 @@
 - 활성 PUT을 가진 bridge를 단순 재시작하지 않는다.
 - consistency는 고정값으로 낮추지 않고, 검증된 과거 라운드에서 필요한 목표를
   역산한 뒤 exact replay가 확인한 후보만 사용한다.
-- 비교 가능한 표본이 3개 미만이거나 시간이 부족하면 consistency 1.0의
-  max-score 경로로 fail-safe 한다.
+- 비교 가능한 새 epoch 표본이 3개 미만이면 cold-start target 0.85를 사용하고,
+  exact replay 결과 0.79–0.85 범위의 managed 후보를 우선한다.
 - 코드와 테스트는 GitHub `personal/main`에 푸시되어 있다.
 - 원격 Tao/Won 서버에는 이 커밋을 아직 이 세션에서 직접 배포하지 않았다.
   별도의 원격 코딩에이전트가 원격 환경에 맞춰 단계적으로 배포해야 한다.
@@ -133,7 +134,7 @@ normalized_top = official_top_score / baseline
 - 최대 최근 표본: 5
 - quantile: 80 percentile
 - 선두 대비 safety margin: 5%
-- 허용 target consistency 범위: 0.60–0.85
+- 허용 target consistency 범위: 0.79–0.85
 - partial-seed anchor: 0.70
 - exact replay budget: 45초
 - validation 전 upload reserve: 75초
@@ -145,14 +146,13 @@ normalized_top = official_top_score / baseline
 required_consistency = percentile80(normalized_top history) * 1.05
 ```
 
-`required_consistency`가 0.60–0.85 안에 있을 때만 targeted 후보를 만든다. builder는
+`required_consistency`는 0.79–0.85 범위로 clamp한다. builder는
 여러 candidate를 만들고 bridge는 실제 세 seed로 exact replay한다. target보다 낮은
 후보는 채택하지 않으며 target을 넘는 후보 중 가장 가까운 결과를 선택한다.
 
 fail-safe 조건:
 
 - consistency control 비활성
-- 유효 표본 3개 미만
 - 공식 점수 정확 매칭 실패
 - chain-authoritative provenance 부족
 - target 범위 밖
@@ -180,9 +180,9 @@ fail-safe 조건:
 - `NIOME_BRIDGE_OBSERVE_ONLY=true`: seed를 읽고 후보/여유를 평가하지만 실제 재제출은
   하지 않는 관측 모드
 
-코드 기본값은 consistency control 활성이다. 다만 유효 표본이 3개 미만이면 자동으로
-max-score가 된다. 원격 최초 배포는 명시적으로 `NIOME_CONSISTENCY_CONTROL=false`로
-시작하고 3개의 신뢰 라운드가 쌓인 뒤 별도 검토하여 켠다.
+코드 기본값은 consistency control 활성이다. 유효 표본이 3개 미만이면 cold-start
+target 0.85가 된다. `NIOME_CONSISTENCY_CONTROL=false`는 consistency 1.0의 max-score
+경로이므로 일반적인 최초 배포값으로 사용하지 않고 긴급 kill switch로만 사용한다.
 
 주의: 이 기능은 8개 마이너의 점수를 강제로 서로 다르게 만들지 않는다. 각 miner가
 분리된 artifact history를 가지면 baseline과 과거 표본 차이로 점수가 달라질 가능성이
@@ -347,10 +347,10 @@ dashboard identity에 맞게 보존/재작성한다.
 5. 원격 active PUT이 있다면 종료 전에 재시작하지 않도록 확인한다.
 6. 원격 4개까지 전환된 뒤 통합 dashboard에서 8개 miner를 확인한다.
 7. 각 miner가 독립 artifact root/history를 사용하는지 검사한다.
-8. 최소 3개의 chain-authoritative 공식 매칭 라운드가 쌓이기 전에는 원격 consistency
-   control을 켜지 않는다.
-9. 3개 이상 쌓이면 normalized history, target, exact candidate 결과를 사람이 검토한 뒤
-   점진적으로 활성화한다.
+8. 새 epoch의 contract-authoritative 공식 매칭 라운드가 3개 미만이면 원격도
+   consistency control을 켠 상태에서 cold-start target 0.85를 사용한다.
+9. 3개 이상 쌓이면 normalized history와 exact candidate 결과를 검토하며 target은
+   0.79–0.85 범위로 유지한다.
 
 ## 11. 절대 피해야 할 작업
 

@@ -35,7 +35,7 @@ use a cold-start target of `0.85`, not the consistency-`1.0` fallback. The
 bridge exact-replays managed candidates, rejects the maximum-score candidate,
 and will leave the safe object untouched if it cannot verify a managed result
 below the cold-start ceiling. After three rounds, the existing history-derived
-target may activate; out-of-band estimates are clamped to `0.60..0.85` instead
+target may activate; out-of-band estimates are clamped to `0.79..0.85` instead
 of jumping to `1.0`.
 
 ## 2026-09-26 verified chain-seed cutover
@@ -73,12 +73,12 @@ ratios plus a 5% multiplicative safety margin. This normalized form is why a
 different absolute score scale in the current task does not invalidate the
 threshold.
 
-Targets are applied only inside `0.60..0.85`. Anything outside that range,
-missing official history, an unverified local replay, or fewer than three
-samples selects the ordinary maximum-score path with consistency `1.0`. Within
-the band, the builder blends rows that are HDR-stable on one, two, or all three
-authoritative seeds. The two-seed anchor is the replay-measured `0.70`; the
-full-seed anchor is `1.0`. A live-artifact replay showed that Stage 4 responds
+Targets are applied inside `0.79..0.85`; out-of-band history is clamped to the
+nearest boundary. With fewer than three current-epoch samples, cold-start uses
+`0.85` and excludes the consistency-`1.0` candidate. Within the band, the
+builder blends rows that are HDR-stable on one, two, or all three authoritative
+seeds. The two-seed anchor is the replay-measured `0.70`; the full-seed anchor
+is `1.0`. A live-artifact replay showed that Stage 4 responds
 approximately quadratically rather than linearly to the all-seed row share, so
 the controller uses the inverse square-root response plus a 5-point row-share
 reserve only to place candidate probes. The final choice never trusts that
