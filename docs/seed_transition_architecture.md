@@ -40,15 +40,14 @@ non-placeholder contract seed. Consistency history now accepts only completed
 `contract-authoritative` rounds whose local score appears exactly in the
 official scoreboard and whose seed-authority epoch is
 `late-contract-random-v1`. The epoch prevents older contract or chain rollout
-samples from contaminating the new regime. Fewer than three such rounds
-use a cold-start target of `0.85`, not the consistency-`1.0` fallback. The
-bridge exact-replays managed candidates, rejects the maximum-score candidate,
-and will leave the safe object untouched if it cannot verify a managed result
-below the cold-start ceiling. After three rounds, the existing history-derived
-target may activate; out-of-band estimates are clamped to `0.79..0.85` instead
-of jumping to `1.0`. All enabled targeting modes use the same exact-selection
-band and exclude the consistency-`1.0` fallback, including under replay-time
-pressure.
+samples from contaminating the new regime. Fewer than three such rounds use a
+cold-start target of `0.77` and an exact selection band of `0.60..0.77`, not the
+consistency-`1.0` fallback. The bridge exact-replays managed candidates, rejects
+the maximum-score candidate, and leaves the safe object untouched if it cannot
+verify a managed result inside the cold-start band. After three rounds, the
+existing history-derived target activates with its separate `0.79..0.85` band.
+Both enabled targeting modes exclude the consistency-`1.0` fallback, including
+under replay-time pressure.
 
 ## 2026-09-26 verified chain-seed cutover
 
@@ -85,9 +84,10 @@ ratios plus a 5% multiplicative safety margin. This normalized form is why a
 different absolute score scale in the current task does not invalidate the
 threshold.
 
-Targets are applied inside `0.79..0.85`; out-of-band history is clamped to the
-nearest boundary. With fewer than three current-epoch samples, cold-start uses
-`0.85` and excludes the consistency-`1.0` candidate. Within the band, the
+History-derived targets are applied inside `0.79..0.85`; out-of-band history is
+clamped to the nearest boundary. With fewer than three current-epoch samples,
+cold-start instead uses target `0.77`, requires exact results inside
+`0.60..0.77`, and excludes the consistency-`1.0` candidate. Within each band, the
 builder blends rows that are HDR-stable on one, two, or all three authoritative
 seeds. The two-seed anchor is the replay-measured `0.70`; the full-seed anchor
 is `1.0`. A live-artifact replay showed that Stage 4 responds

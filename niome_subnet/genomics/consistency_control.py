@@ -18,6 +18,8 @@ DEFAULT_MIN_SAMPLES = 3
 DEFAULT_HISTORY_LIMIT = 5
 DEFAULT_QUANTILE = 0.80
 DEFAULT_SAFETY_MARGIN = 0.05
+DEFAULT_COLD_START_MIN_TARGET = 0.60
+DEFAULT_COLD_START_MAX_TARGET = 0.77
 DEFAULT_MIN_TARGET = 0.79
 DEFAULT_MAX_TARGET = 0.85
 # Optimising two of three seeds produced 0.7044 in the verified replay.  Use a
@@ -56,6 +58,8 @@ class ConsistencyDecision:
     normalized_top_scores: tuple[float, ...]
     partial_seed_anchor: float = PARTIAL_SEED_ANCHOR
     all_seed_hdr_share: float | None = None
+    minimum_consistency: float | None = None
+    maximum_consistency: float | None = None
 
     @property
     def targeting_enabled(self) -> bool:
@@ -131,6 +135,8 @@ def decide_consistency_target(
     safety_margin: float = DEFAULT_SAFETY_MARGIN,
     min_target: float = DEFAULT_MIN_TARGET,
     max_target: float = DEFAULT_MAX_TARGET,
+    cold_start_min_target: float = DEFAULT_COLD_START_MIN_TARGET,
+    cold_start_max_target: float = DEFAULT_COLD_START_MAX_TARGET,
 ) -> ConsistencyDecision:
     """Return a fail-safe target or the ordinary maximum-score policy."""
     if not 0.0 <= quantile <= 1.0:
@@ -139,6 +145,10 @@ def decide_consistency_target(
         raise ValueError("safety_margin must be non-negative")
     if not 0.0 <= min_target <= max_target <= 1.0:
         raise ValueError("target bounds must satisfy 0 <= min <= max <= 1")
+    if not 0.0 <= cold_start_min_target <= cold_start_max_target <= 1.0:
+        raise ValueError(
+            "cold-start bounds must satisfy 0 <= min <= max <= 1"
+        )
 
     valid = [
         sample
@@ -175,11 +185,15 @@ def decide_consistency_target(
             ),
             sample_count=len(valid),
             required_consistency=None,
-            target_consistency=max_target,
+            target_consistency=cold_start_max_target,
             safety_margin=safety_margin,
             quantile=quantile,
             normalized_top_scores=ratios,
-            all_seed_hdr_share=all_seed_hdr_share_for_target(max_target),
+            all_seed_hdr_share=all_seed_hdr_share_for_target(
+                cold_start_max_target
+            ),
+            minimum_consistency=cold_start_min_target,
+            maximum_consistency=cold_start_max_target,
         )
 
     required = _linear_quantile(list(ratios), quantile) * (1.0 + safety_margin)
@@ -207,4 +221,6 @@ def decide_consistency_target(
         quantile=quantile,
         normalized_top_scores=ratios,
         all_seed_hdr_share=all_seed_hdr_share_for_target(target),
+        minimum_consistency=min_target,
+        maximum_consistency=max_target,
     )

@@ -95,7 +95,7 @@ def test_exact_consistency_search_selects_closest_candidate_above_target(
     assert diagnostics["fallback_used"] is False
 
 
-def test_cold_start_exact_search_never_selects_consistency_one(monkeypatch):
+def test_cold_start_exact_search_stays_in_lower_band(monkeypatch):
     class Result:
         def __init__(self, consistency):
             self.final_score = 250.0 * consistency
@@ -108,7 +108,7 @@ def test_cold_start_exact_search_never_selects_consistency_one(monkeypatch):
     class Artifacts:
         contract = {"seed": "old"}
 
-    achieved = {"max": 1.0, "low": 0.72, "near": 0.84, "high": 0.88}
+    achieved = {"max": 1.0, "low": 0.62, "near": 0.73, "high": 0.81}
 
     def fake_evaluate(candidate, _artifacts, raw_submission_bytes):
         assert raw_submission_bytes
@@ -131,17 +131,52 @@ def test_cold_start_exact_search_never_selects_consistency_one(monkeypatch):
         candidates=candidates,
         artifacts=Artifacts(),
         seeds=[1, 2, 3],
-        target_consistency=0.85,
+        target_consistency=0.77,
         allow_max_score_fallback=False,
-        minimum_consistency=0.79,
-        maximum_consistency=0.85,
+        minimum_consistency=0.60,
+        maximum_consistency=0.77,
     )
 
     assert selected[0]["experiment_id"] == "near"
     assert diagnostics["selected_label"] == "managed-near"
-    assert diagnostics["selected"]["consistency_factor"] == pytest.approx(0.84)
+    assert diagnostics["selected"]["consistency_factor"] == pytest.approx(0.73)
     assert diagnostics["fallback_used"] is False
     assert diagnostics["target_met"] is False
+
+
+def test_managed_exact_search_rejects_candidate_below_band(monkeypatch):
+    class Result:
+        final_score = 100.0
+        breakdown = {
+            "consistency_factor": 0.58,
+            "total_weighted_score": 200.0,
+            "distribution_fidelity_factor": 1.0,
+        }
+
+    class Artifacts:
+        contract = {"seed": "old"}
+
+    monkeypatch.setattr(
+        bridge_module,
+        "evaluate_submission",
+        lambda *_args, **_kwargs: Result(),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "replace",
+        lambda artifacts, contract: Artifacts(),
+    )
+
+    with pytest.raises(RuntimeError, match="inside its consistency band"):
+        _choose_exact_consistency_candidate(
+            candidates=[("managed-low", [{"experiment_id": "low"}])],
+            artifacts=Artifacts(),
+            seeds=[1, 2, 3],
+            target_consistency=0.77,
+            allow_max_score_fallback=False,
+            minimum_consistency=0.60,
+            maximum_consistency=0.77,
+        )
 
 
 def test_fetch_refreshed_contract_uses_task_url_without_persisting_it(

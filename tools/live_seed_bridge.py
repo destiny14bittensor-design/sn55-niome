@@ -35,6 +35,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 import bittensor as bt
 
 from niome_subnet.genomics.consistency_control import (
+    DEFAULT_COLD_START_MAX_TARGET,
     ConsistencyDecision,
     ConsistencySample,
     decide_consistency_target,
@@ -76,8 +77,6 @@ CONSISTENCY_HISTORY_LIMIT = 5
 CONSISTENCY_SCORE_TIMEOUT_SECONDS = 10.0
 CONSISTENCY_REPLAY_BUDGET_SECONDS = 45.0
 CONSISTENCY_UPLOAD_RESERVE_SECONDS = 75.0
-PREFERRED_MIN_EXACT_CONSISTENCY = 0.79
-PREFERRED_MAX_EXACT_CONSISTENCY = 0.85
 SEED_AUTHORITY_EPOCH = "late-contract-random-v1"
 POLL_SECONDS = 2.0
 CONTRACT_POLL_SECONDS = 6.0
@@ -384,7 +383,12 @@ def _choose_exact_consistency_candidate(
             # The measured Stage-4 response changes steeply near the full-HDR
             # endpoint. Probe the middle of that transition first so even a
             # one-replay deadline has a useful non-1.0 candidate.
-            return (0, abs(percent - 97), label)
+            preferred_percent = (
+                0
+                if target_consistency <= DEFAULT_COLD_START_MAX_TARGET
+                else 97
+            )
+            return (0, abs(percent - preferred_percent), label)
         # After establishing the safety fallback, probe the high-consistency
         # end first.  The 45-second live budget normally fits two more
         # exact RF replays.
@@ -445,7 +449,7 @@ def _choose_exact_consistency_candidate(
         chosen = min(
             eligible,
             key=lambda item: (
-                float(item["consistency_factor"]) - target_consistency,
+                abs(float(item["consistency_factor"]) - target_consistency),
                 -float(item["final_score"]),
                 item["label"],
             ),
@@ -461,13 +465,18 @@ def _choose_exact_consistency_candidate(
             if item.get("label") != "max-score-fallback"
             and isinstance(item.get("consistency_factor"), (int, float))
             and (
+                minimum_consistency is None
+                or float(item["consistency_factor"])
+                >= minimum_consistency - 1e-12
+            )
+            and (
                 maximum_consistency is None
                 or float(item["consistency_factor"]) <= maximum_consistency + 1e-12
             )
         ]
         if not managed:
             raise RuntimeError(
-                "cold-start exact frontier had no candidate below its consistency ceiling"
+                "exact frontier had no managed candidate inside its consistency band"
             )
         chosen = min(
             managed,
@@ -1272,8 +1281,8 @@ def _handle_envelope(envelope_path: Path) -> None:
                 target_consistency=consistency_decision.target_consistency,
                 budget_seconds=replay_budget,
                 allow_max_score_fallback=False,
-                minimum_consistency=PREFERRED_MIN_EXACT_CONSISTENCY,
-                maximum_consistency=PREFERRED_MAX_EXACT_CONSISTENCY,
+                minimum_consistency=consistency_decision.minimum_consistency,
+                maximum_consistency=consistency_decision.maximum_consistency,
             )
             exact_search["estimated_seconds_to_validation"] = (
                 estimated_seconds_to_validation

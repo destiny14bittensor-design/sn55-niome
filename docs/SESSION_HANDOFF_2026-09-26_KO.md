@@ -7,8 +7,8 @@
 > 완성하며, consistency history는 `contract-authoritative` exact-match 라운드만
 > 인정한다. 상세 근거는 `docs/seed_transition_architecture.md`의 최신 최상단 절을
 > 따른다. 또한 새 epoch 표본이 3개 미만이면 consistency `1.0`이 아니라 cold-start
-> target `0.85`를 사용하며, exact replay된 managed 후보만 허용한다.
-> cold-start와 history 기반 target의 우선 선택 범위는 `0.79–0.85`이다.
+> target `0.77`을 사용하며, exact replay된 managed 후보만 허용한다.
+> cold-start 선택 범위는 `0.60–0.77`, history 기반 범위는 `0.79–0.85`이다.
 
 ## 1. 목적과 현재 결론
 
@@ -25,8 +25,8 @@
 - 활성 PUT을 가진 bridge를 단순 재시작하지 않는다.
 - consistency는 고정값으로 낮추지 않고, 검증된 과거 라운드에서 필요한 목표를
   역산한 뒤 exact replay가 확인한 후보만 사용한다.
-- 비교 가능한 새 epoch 표본이 3개 미만이면 cold-start target 0.85를 사용하고,
-  exact replay 결과 0.79–0.85 범위의 managed 후보를 우선한다.
+- 비교 가능한 새 epoch 표본이 3개 미만이면 cold-start target 0.77을 사용하고,
+  exact replay 결과 0.60–0.77 범위의 managed 후보만 허용한다.
 - 코드와 테스트는 GitHub `personal/main`에 푸시되어 있다.
 - 원격 Tao/Won 서버에는 이 커밋을 아직 이 세션에서 직접 배포하지 않았다.
   별도의 원격 코딩에이전트가 원격 환경에 맞춰 단계적으로 배포해야 한다.
@@ -134,7 +134,8 @@ normalized_top = official_top_score / baseline
 - 최대 최근 표본: 5
 - quantile: 80 percentile
 - 선두 대비 safety margin: 5%
-- 허용 target consistency 범위: 0.79–0.85
+- cold-start consistency 범위: 0.60–0.77
+- history 기반 consistency 범위: 0.79–0.85
 - partial-seed anchor: 0.70
 - exact replay budget: 45초
 - validation 전 upload reserve: 75초
@@ -181,7 +182,7 @@ fail-safe 조건:
   하지 않는 관측 모드
 
 코드 기본값은 consistency control 활성이다. 유효 표본이 3개 미만이면 cold-start
-target 0.85가 된다. `NIOME_CONSISTENCY_CONTROL=false`는 consistency 1.0의 max-score
+target 0.77이 된다. `NIOME_CONSISTENCY_CONTROL=false`는 consistency 1.0의 max-score
 경로이므로 일반적인 최초 배포값으로 사용하지 않고 긴급 kill switch로만 사용한다.
 
 주의: 이 기능은 8개 마이너의 점수를 강제로 서로 다르게 만들지 않는다. 각 miner가
@@ -348,7 +349,7 @@ dashboard identity에 맞게 보존/재작성한다.
 6. 원격 4개까지 전환된 뒤 통합 dashboard에서 8개 miner를 확인한다.
 7. 각 miner가 독립 artifact root/history를 사용하는지 검사한다.
 8. 새 epoch의 contract-authoritative 공식 매칭 라운드가 3개 미만이면 원격도
-   consistency control을 켠 상태에서 cold-start target 0.85를 사용한다.
+   consistency control을 켠 상태에서 cold-start target 0.77과 0.60–0.77 범위를 사용한다.
 9. 3개 이상 쌓이면 normalized history와 exact candidate 결과를 검토하며 target은
    0.79–0.85 범위로 유지한다.
 

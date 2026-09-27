@@ -23,7 +23,9 @@ def test_insufficient_history_uses_cold_start_ceiling():
     )
 
     assert decision.mode == "cold-start"
-    assert decision.target_consistency == pytest.approx(0.85)
+    assert decision.target_consistency == pytest.approx(0.77)
+    assert decision.minimum_consistency == pytest.approx(0.60)
+    assert decision.maximum_consistency == pytest.approx(0.77)
     assert decision.targeting_enabled is True
     assert decision.cold_start is True
     assert "at least 3" in decision.reason
@@ -44,6 +46,8 @@ def test_target_uses_normalized_quantile_and_safety_margin():
     assert decision.mode == "targeted"
     assert decision.required_consistency == pytest.approx(0.7602)
     assert decision.target_consistency == pytest.approx(0.79)
+    assert decision.minimum_consistency == pytest.approx(0.79)
+    assert decision.maximum_consistency == pytest.approx(0.85)
     assert decision.all_seed_hdr_share == pytest.approx(
         ((0.79 - 0.70) / 0.30) ** 0.5 + 0.05
     )
