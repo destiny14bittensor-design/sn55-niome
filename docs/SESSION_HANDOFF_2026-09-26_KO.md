@@ -363,3 +363,121 @@ dashboard identity에 맞게 보존/재작성한다.
 - exact replay 없이 targeted consistency 후보 제출
 - `.env`, wallet, mnemonic, private key, presigned URL, runtime artifact 또는 로그를 Git에 추가
 - `git reset --hard`나 기존 사용자 변경 삭제
+
+## 12. 2026-09-27 세션 최종 추가 기록
+
+기록 시각: **2026-09-27 04:14 UTC**. 이 절은 위 문서 중 seed 권위, consistency 및
+런타임 상태와 충돌하는 과거 내용을 최종적으로 대체한다. 다음 세션은 이 절을 우선
+기준으로 삼고, 실제 Git/PM2/artifact 상태를 다시 읽은 뒤 작업한다.
+
+### 12.1 최종 seed 결론과 URL 만료 보조 경로
+
+- validator는 다시 **late-stamped random contract seed**를 사용한다. 과거의
+  chain-authoritative 판단과 chain seed 경로는 현재 운영 기준이 아니다.
+- signed `contract_url`이 유효한 동안에는 그 URL만 polling한다. 원본 contract의
+  `seed: 0`이 실제 seed로 바뀌면 그 값을 authoritative seed로 사용한다.
+- signed URL이 만료된 뒤에도 seed가 0이면 공식
+  `https://niome-api.genomes.io/api/v3/tasks?page=1&per_page=20` 기록을 조회하는 보조
+  경로를 구현했다.
+- 보조 경로는 UUID exact match, contract와 embedded HBB challenge의 일치, 최초
+  capture 대비 seed 외 필드 불변, 동일한 nonzero seed 2회 연속 관측을 모두 만족해야
+  한다. 통과 시 source는 `task-history-expiry-fallback`이다.
+- `/tasks?task_id=...` 및 `/tasks?id=...` 필터는 서버에서 무시되므로 사용하지 않는다.
+  `page/per_page` 목록에서 UUID를 직접 exact-match한다.
+- 실제 API 통합 확인:
+  - `2438f5ac-ac4b-49a7-8c0f-5f7ef6b8250b` → `519,253,867`
+  - `950262bf-d27b-4a2c-8c98-ac087bcf82a3` → `991,912,107`
+- 직전 `2438...` 라운드에서 로컬 Bitcoin/Hype가 seed를 놓친 근본 원인은 signed URL
+  만료가 `2026-09-27 00:51:21 UTC`, 공식 final 기록 출현이 약
+  `2026-09-27 01:06:17 UTC`여서 둘 사이에 공백이 있었기 때문이다. 새 보조 경로가
+  이 공백을 해결한다.
+- 구현 커밋: `53059ca9374a60d7bf29390568444efcf1bf4946`
+  (`Recover late seeds from verified task history`).
+
+### 12.2 consistency 최종 정책
+
+- 비교 가능한 표본이 **3개 미만**이면 cold-start이다.
+  - 목표: `0.77`
+  - 허용 범위: `0.60–0.77`
+  - exact replay된 managed 후보 중 허용 범위 안에서 목표에 가장 가까운 것을 고른다.
+  - cold-start에서는 consistency `1.0`인 `max-score-fallback`을 후보 선택에서 제외한다.
+  - 허용 범위 안의 후보가 하나도 없으면 최적화 overwrite를 완료하지 않고 기존 안전
+    제출물을 그대로 둔다.
+- 비교 가능한 표본이 **3개 이상**이면 history 기반 targeted 모드이다.
+  - 각 miner는 자기 artifact root의 최근 유효 라운드를 최신순 최대 5개만 사용한다.
+  - 유효 표본은 `complete`, epoch `late-contract-random-v1`, seed policy
+    `contract-authoritative`, `comparable_to_official=true`여야 한다.
+  - 그 miner의 local exact final score가 같은 task의 공식 scoreboard 항목에서 실제로
+    발견되어야 표본으로 인정한다.
+  - 라운드별 local baseline은
+    `B_i = total_weighted_score_i * distribution_fidelity_factor_i`이다.
+  - 같은 라운드의 모든 miner 중 공식 1위 final score를 `T_i`라 하고
+    `R_i = T_i / B_i`로 정규화한다.
+  - `required = percentile80(R_i) * 1.05`로 계산하고,
+    `target = clamp(required, 0.79, 0.85)`로 결정한다.
+  - 즉, 다른 상위 miner들의 consistency 값을 history 표본으로 직접 가져오는 것이
+    아니다. **우리 miner의 검증된 local baseline**과 **같은 라운드 공식 1위 점수**의
+    비율을 표본으로 사용한다. 각 miner의 history/artifact root는 서로 독립이다.
+  - 최종 제출 후보는 실제 세 seed로 exact replay하며, `0.79–0.85` 범위 안에서 target에
+    가장 가까운 후보를 선택한다.
+- 최신 cold-start 구현 커밋:
+  `d509f80de68f534dedb328a67d089c94ded33948`
+  (`Lower cold-start consistency band`).
+- 최신 전체 테스트 결과: `.venv/bin/python -m pytest -q` →
+  **100 passed in 50.90s**.
+
+최근 완료 4개 라운드의 공식 1–3위 consistency factor는 다음과 같았다.
+
+| task | 1위 | 2위 | 3위 |
+|---|---:|---:|---:|
+| `950262bf...` | 0.645283 | 0.670278 | 0.627492 |
+| `2438f5ac...` | 0.698058 | 0.683394 | 0.655318 |
+| `cb53c30c...` | 0.813040839 | 0.838756 | 0.803084 |
+| `11225e98...` | 0.716744 | 0.719788 | 0.685042 |
+
+최근 공식 task seed는 다음과 같이 확인했다.
+
+| task | 최종 공식 seed |
+|---|---:|
+| `950262bf...` | 991,912,107 |
+| `2438f5ac...` | 519,253,867 |
+| `cb53c30c...` | 999,668,630 |
+| `11225e98...` | 795,975,199 |
+| `f05ef562...` | 491,210,379 |
+
+### 12.3 기록 시점 Git과 로컬 배포 상태
+
+- 기록 전 Git은 `main == personal/main == d509f80`, 작업트리는 깨끗했다. 이 문서
+  기록 커밋이 그 뒤에 추가된다.
+- `niome-seed-bridge`(bitcoin1, PID 2916806)와
+  `niome-seed-bridge-dollar3`(hype1, PID 2916811)는 `d509f80`으로 재시작되어
+  cold-start `0.60–0.77` 정책을 실행한다.
+- `niome-seed-bridge-dollar2`(bitcoin2, PID 2912501)와
+  `niome-seed-bridge-dollar4`(hype2, PID 2913177)는 task
+  `569500e8-c794-417f-9ad7-0f9c2a51c982`의 가치 있는 활성 PUT을 보존하기 위해
+  재시작하지 않았다. 두 프로세스에는 `53059ca`의 `/tasks` 만료 보조 경로는 있지만,
+  이 task의 이미 확정된 consistency decision은 이전 cold-start target `0.85`이다.
+- 위 두 bridge는 기록 시점 모두 `waiting_for_contract_seed`, seed `0`, source
+  `signed-contract`, 유효 표본 0이었다. 활성 PUT이 drain/완료된 뒤에만 재시작하여
+  `d509f80`을 로드해야 한다.
+- 네 miner와 네 bridge, 통합 dashboard는 online이었다. 개별 dollar2/3/4 dashboard는
+  통합 dashboard 사용 때문에 stopped가 정상이다.
+- 원격 Tao/Won에는 `53059ca` 및 `d509f80`을 아직 배포하지 않았다. 원격 identity 파일을
+  로컬 Bitcoin/Hype 설정으로 덮지 말고, 원격 active PUT을 먼저 확인한 뒤 순차 배포한다.
+
+### 12.4 다음 세션의 첫 작업과 이어갈 일
+
+다음 새 세션은 다른 조치보다 먼저 사용자에게 다음을 구체적인 숫자 예와 함께 설명한다.
+
+1. 표본 3개가 어디에서 생기는지: 각 **우리 miner 자신의** 완료·공식 exact-match 라운드.
+2. 각 표본에서 `B_i`, `T_i`, `R_i=T_i/B_i`가 무엇인지.
+3. `P80(R) * 1.05`와 `clamp(0.79, 0.85)`가 실제 target을 어떻게 만드는지.
+4. 상위 miner들의 consistency factor를 직접 평균내지 않는 이유.
+5. miner별 독립 history가 서로 다른 target을 만들 수 있는 이유.
+
+그 설명 뒤 현재 상태를 재확인하고, bitcoin2/hype2의 활성 PUT이 끝났다면 두 bridge를
+안전하게 재시작해 `d509f80`을 적용한다. 그 다음에만 원격 Tao/Won 배포 여부를 다룬다.
+
+### 12.5 다음 세션 시작용 한 줄 프롬프트
+
+`/home/administrator/workspace/subnet-niome/docs/SESSION_HANDOFF_2026-09-26_KO.md를 처음부터 끝까지 읽고 현재 Git·PM2·활성 PUT 상태를 재확인한 뒤, 먼저 표본이 3개 이상일 때 각 우리 miner의 공식 exact-match history로 B_i·T_i·R_i를 만들고 P80(R)×1.05를 0.79–0.85로 clamp하여 consistency를 제어하는 방식을 숫자 예와 함께 설명한 후 남은 작업을 그대로 이어가라.`
