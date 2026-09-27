@@ -509,3 +509,82 @@ dashboard identity에 맞게 보존/재작성한다.
 - 이 로컬 호스트의 SSH 키는 `administrator`, `root`, `ubuntu` 계정 모두 원격
   `108.181.196.26`에서 거부됐다. 원격 배포를 계속하려면 해당 서버에 유효한 SSH
   접근 또는 그 서버에서 실행되는 별도 코딩에이전트가 필요하다.
+
+## 14. 2026-09-27 06시 세션 — late seed 재제출 실패 원인 확정
+
+### 14.1 task `569500e8...`의 실제 시간 순서
+
+- 원본 signed `contract_url` 만료: `2026-09-27 05:40:03 UTC`.
+- 공식 scoreboard에서 우리 네 miner의 safe submission 채점 시각:
+  `2026-09-27 05:54:08.982101 UTC`.
+- task-history에서 seed 후보 `983,903,460` 첫 관측·상태 저장:
+  - bitcoin2: `05:56:23.525620`
+  - hype2: `05:56:23.556784`
+  - bitcoin1: `05:56:23.959120`
+  - hype1: `05:56:23.983106`
+- 동일 seed의 두 번째 연속 확인 및 authoritative 확정:
+  - bitcoin2: `05:56:29.689073` — 첫 저장 후 `6.164초`
+  - hype2: `05:56:29.719975` — `6.163초`
+  - bitcoin1: `05:56:30.125235` — `6.166초`
+  - hype1: `05:56:30.153075` — `6.170초`
+- 첫 후보 전용 event는 구현되어 있지 않다. 위 첫 관측 시각은 candidate와 confirmation
+  count 1을 상태에 저장한 poll의 `last_observed_at`이며, 두 번째 확인은
+  `authoritative_contract_seed_observed` event의 정확한 시각이다.
+- 결론: `/api/v3/tasks` 만료 보조 경로는 정확히 작동했지만 seed는 공식 채점보다 약
+  2분 15초 늦게 관측됐다. 현재 관측된 task-history seed 공개는 같은 라운드의
+  재최적화 창이 아니라 사후 감사·exact replay 용도다.
+
+### 14.2 결과 생성과 S3 PUT 실패의 분리
+
+- 실제 seed 기반 결과 생성은 네 lane 모두 성공했다.
+  - bitcoin1/hype1: 250 rows, 같은 SHA256, build 약 128–130초
+  - bitcoin2/hype2: 252 rows, 같은 SHA256, build 약 124–128초
+  - 각 task dir에 `seed_bridge_submission.json`이 존재한다.
+- 실패는 결과 생성 뒤 PUT completion에서 발생했다. 여덟 stream 모두
+  `503 Slow Down`, `failure_category=s3_http_rejection`으로 종료됐다.
+- `SlowPut`은 seed 대기 중에는 64 KiB/s이지만 `finish_with()` 뒤에는 남은 고정 body를
+  1 MiB chunk로 sleep 없이 보낸다. 이번에는 stream별 남은 약 122–230 MiB를
+  8–32초에 flush하여 약 6.9–20.6 MiB/s가 됐고, 네 lane의 8개 stream이 거의 같은
+  시각 `/niome/` prefix에서 완료를 시도했다. 이것이 직접적인 S3 throttling 원인이다.
+- 따라서 두 독립 실패가 있었다.
+  1. seed 공개가 공식 채점 뒤라서 성공적으로 PUT했어도 이번 채점에는 늦었다.
+  2. 실제 PUT도 unpaced completion burst 때문에 S3에서 거절됐다.
+
+### 14.3 확인 seed exact replay와 실제 공식 점수
+
+- 실제 공식 채점에는 safe submission만 남았고 네 miner가 모두 다음 결과였다.
+  - final score `36.9206027807735`
+  - consistency `0.11155211973794726`
+  - 당시 공식 1위 `194.92395821165886`
+- 저장된 optimized submission을 seed `983,903,460`으로 다시 exact replay한 결과:
+
+| 제출 그룹 | consistency | exact final score | 기존 공식 1위 대비 |
+|---|---:|---:|---:|
+| bitcoin1 / hype1 | 0.7148091200343959 | 231.1963943040648 | +36.2724360924059 |
+| bitcoin2 / hype2 | 0.7819622915982284 | 254.07780154838238 | +59.1538433367235 |
+
+- 각 결과를 기존 scoreboard와 개별 비교하면 모두 1위다. 네 결과가 모두 반영됐다면
+  bitcoin2/hype2가 공동 최고점이고 bitcoin1/hype1이 그다음이지만, 두 그룹 모두 기존
+  공식 1위보다 높다. consistency target 자체가 이번 실패의 직접 원인은 아니다.
+
+### 14.4 다음 세션의 시작 조사
+
+다음 세션은 다른 운영 변경보다 먼저 **공식 공개·채점 전에 이용 가능한 권위 있고
+허용된 seed 신호가 실제로 존재하는지**를 조사한다. validator나 제3자의 비공개 정보에
+무단 접근하거나 우회하지 않고 다음을 시간축으로 검증한다.
+
+1. 여러 새 라운드에서 signed contract, 공식 current/history task API, scoreboard 생성,
+   chain event/block 및 validator 공개 코드를 동일 UTC 기준으로 계측한다.
+2. seed 생성 알고리즘이 결정론적인지, 공개 chain/task 입력만으로 채점 전에 재현 가능한지
+   확인한다. 추측값은 제출에 사용하지 않고 exact replay로만 검증한다.
+3. 합법적인 pre-score source가 없다면 same-round late overwrite 전제를 폐기하고, 공개된
+   과거 seed history로 현재 라운드 이전에 robust submission을 만드는 설계로 전환한다.
+4. same-round 경로가 실제로 성립할 때만 unpaced completion burst를 수정하고, PUT 수·prefix
+   throttling·마감 여유를 재설계한다.
+5. 현재 task의 bridge는 모두 terminal `failed`이고 active PUT은 없다. 다음 세션은 먼저
+   PM2와 새 task 유무를 재확인한 뒤 bitcoin2/hype2의 구버전 bridge를 한 lane씩 안전하게
+   현재 코드로 전환한다.
+
+### 14.5 다음 세션 시작용 한 줄 프롬프트
+
+`/home/administrator/workspace/subnet-niome/docs/SESSION_HANDOFF_2026-09-26_KO.md를 처음부터 끝까지 읽고 Git·PM2·현재 task와 active PUT을 재확인한 뒤, 먼저 여러 공식 라운드의 signed contract·task API·scoreboard·chain·validator 공개 코드를 UTC 타임라인으로 대조하여 seed가 공식 공개·채점되기 전에 권위 있고 허용된 정보만으로 결정되거나 관측될 수 있는지 검증하고, 가능하지 않으면 same-round overwrite 전제를 폐기하는 방향으로 남은 작업을 이어가라.`
