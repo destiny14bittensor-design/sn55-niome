@@ -481,3 +481,31 @@ dashboard identity에 맞게 보존/재작성한다.
 ### 12.5 다음 세션 시작용 한 줄 프롬프트
 
 `/home/administrator/workspace/subnet-niome/docs/SESSION_HANDOFF_2026-09-26_KO.md를 처음부터 끝까지 읽고 현재 Git·PM2·활성 PUT 상태를 재확인한 뒤, 먼저 표본이 3개 이상일 때 각 우리 miner의 공식 exact-match history로 B_i·T_i·R_i를 만들고 P80(R)×1.05를 0.79–0.85로 clamp하여 consistency를 제어하는 방식을 숫자 예와 함께 설명한 후 남은 작업을 그대로 이어가라.`
+
+## 13. 2026-09-27 후속 세션 기록
+
+기록 시각: **2026-09-27 04:36 UTC**.
+
+- Git은 `main == personal/main == 1c9e517`이다. 새 커밋
+  `Cache dashboard validation summaries`는 dashboard가 각 lane의 약 1 MiB
+  exact-validation history를 2초마다 반복 파싱하던 문제를 고쳤다.
+- validation summary cache는 `(path, mtime_ns, size)`로 무효화하고 완전한 validation
+  payload가 아닌 작은 summary만 보관한다. 네 artifact root의 warm refresh는 약
+  `0.60초`에서 `0.03초`로 감소했고 dashboard CPU 표본은 지속 10–39%에서 대부분
+  0.5–1.5%로 감소했다. 전체 테스트는 `101 passed in 52.19s`였다.
+- 통합 federation API는 로컬 UID 155/223/96/159와 원격 UID 230/4/92/38,
+  총 8개 miner를 online으로 반환했다.
+- 현재 task는 `569500e8-c794-417f-9ad7-0f9c2a51c982`이다. 네 로컬 bridge 모두
+  `waiting_for_contract_seed`, seed `0`, source `signed-contract`이며 각각 두 64 KiB/s
+  PUT이 전송 중이다. signed URL 만료 시각은 `2026-09-27 05:40:03 UTC`이다.
+- bitcoin1과 hype1은 새 cold-start target `0.77`, 허용 범위 `0.60–0.77`을 실행한다.
+  bitcoin2와 hype2는 이 task에서 이미 정해진 이전 target `0.85`를 보존 중이다.
+  **bitcoin2/hype2는 아직 재시작하면 안 된다.** 두 bridge가 terminal 상태가 되고
+  active stream이 없어진 뒤 한 lane씩 miner 신규 작업을 막고 bridge를 재시작하여
+  현재 코드를 로드한 다음 miner를 다시 시작한다.
+- 원격 dashboard API에서 Tao/Won 4개 miner와 4개 bridge는 online이나 bridge는 여전히
+  과거 `waiting_for_seed_blocks` 상태이며 현재 PUT은 없었다. `53059ca/d509f80` 계열은
+  아직 원격에 배포되지 않은 것으로 보인다.
+- 이 로컬 호스트의 SSH 키는 `administrator`, `root`, `ubuntu` 계정 모두 원격
+  `108.181.196.26`에서 거부됐다. 원격 배포를 계속하려면 해당 서버에 유효한 SSH
+  접근 또는 그 서버에서 실행되는 별도 코딩에이전트가 필요하다.
