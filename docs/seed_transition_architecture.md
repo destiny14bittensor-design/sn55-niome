@@ -25,6 +25,16 @@ The live bridge therefore follows the legacy late-contract lifecycle again:
 5. Complete one surviving PUT; if seeds never appear or both streams fail,
    leave the safe object untouched.
 
+The original signed contract URL is still the primary authority. If that URL
+expires while its seed remains `0`, the bridge switches to a narrowly scoped
+public task-history fallback. It polls the newest 20 `/api/v3/tasks` records,
+requires an exact task UUID match, verifies that both the contract and embedded
+HBB challenge are unchanged apart from the seed, requires those two contract
+copies to agree, and accepts a non-placeholder seed only after two consecutive
+identical observations. The selected policy and artifacts record
+`task-history-expiry-fallback` as the source. Before signed-URL expiry, task
+history can never override the signed object.
+
 Block-derived seeds are never officially comparable and never override a
 non-placeholder contract seed. Consistency history now accepts only completed
 `contract-authoritative` rounds whose local score appears exactly in the
@@ -221,6 +231,8 @@ claim about the validator's unrevealed random seeds.
 When the initial contract remains the placeholder, the slow-PUT sidecar enters
 `waiting_for_contract_seed` and keeps polling while any stream survives. It can
 replace the robust baseline only after observing authoritative contract seeds.
+After the signed URL expires, the verified task-history fallback described
+above continues the same wait while a stream survives.
 If every stream closes or contract refresh fails permanently, the incomplete
 requests cannot replace the already-completed baseline because S3 replacement
 is atomic. A process restart cannot resume an existing HTTP body, so inherited

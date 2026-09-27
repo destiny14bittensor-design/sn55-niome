@@ -11,6 +11,7 @@ object in place.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timezone
 import http.client
@@ -54,6 +55,7 @@ from niome_subnet.utils.settings import (
     CHR11_PATH,
     MINER_SCORE_URL,
     SEED_BLOCK,
+    TASK_HISTORY_URL,
     VALIDATION_BLOCK,
 )
 from tools.local_validator.artifacts import ArtifactBundle, sha256_bytes
@@ -80,6 +82,8 @@ SEED_AUTHORITY_EPOCH = "late-contract-random-v1"
 POLL_SECONDS = 2.0
 CONTRACT_POLL_SECONDS = 6.0
 CONTRACT_HTTP_TIMEOUT_SECONDS = 15.0
+TASK_HISTORY_PAGE_SIZE = 20
+TASK_HISTORY_REQUIRED_CONFIRMATIONS = 2
 FAST_SEED_FOCUSED_VARIANTS_PER_ANCHOR = 1
 FAST_SEED_OPTIMIZER_TIME_BUDGET_SECONDS = 5.0
 STREAM_INTERVAL_SECONDS = 1.0
@@ -564,6 +568,69 @@ def _fetch_refreshed_contract(task_dir: Path) -> dict[str, Any]:
     return value
 
 
+def _without_reference_challenge_seed(value: dict[str, Any]) -> dict[str, Any]:
+    """Copy an HBB reference while removing only its nested challenge seed."""
+    normalized = deepcopy(value)
+    challenge = normalized.get("challenge")
+    if not isinstance(challenge, dict):
+        raise ValueError("task history HBB reference has no challenge contract")
+    challenge.pop("seed", None)
+    return normalized
+
+
+def _fetch_task_history_contract(task_dir: Path) -> dict[str, Any]:
+    """Fetch a late seed from public task history and verify task identity.
+
+    The endpoint currently ignores ``task_id`` and ``id`` query parameters, so
+    the bridge fetches a bounded recent page and performs an exact UUID match.
+    A history record is accepted only when the contract and HBB reference are
+    unchanged apart from the seed and both copies advertise the same seed.
+    """
+    task_id = task_dir.name
+    query = urlencode({"page": 1, "per_page": TASK_HISTORY_PAGE_SIZE})
+    request = Request(
+        f"{TASK_HISTORY_URL}?{query}",
+        headers={"Accept": "application/json"},
+    )
+    with urlopen(request, timeout=CONTRACT_HTTP_TIMEOUT_SECONDS) as response:
+        payload = json.loads(response.read())
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("task history response has no items list")
+    matches = [
+        item
+        for item in items
+        if isinstance(item, dict) and item.get("id") == task_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"task history exact match count for {task_id} is {len(matches)}"
+        )
+    content = matches[0].get("content")
+    if not isinstance(content, dict):
+        raise ValueError("task history item has no content object")
+    refreshed = content.get("contract")
+    refreshed_reference = content.get("hbb_reference")
+    if not isinstance(refreshed, dict) or not isinstance(refreshed_reference, dict):
+        raise ValueError("task history item is missing contract or HBB reference")
+    challenge = refreshed_reference.get("challenge")
+    if not isinstance(challenge, dict) or challenge != refreshed:
+        raise ValueError("task history contract and challenge contract disagree")
+
+    original = json.loads((task_dir / "contract.json").read_text(encoding="utf-8"))
+    original_reference = json.loads(
+        (task_dir / "hbb_reference.json").read_text(encoding="utf-8")
+    )
+    if not isinstance(original, dict) or not isinstance(original_reference, dict):
+        raise ValueError("captured task contract or HBB reference is invalid")
+    _assert_contract_seed_only_changed(original, refreshed)
+    if _without_reference_challenge_seed(original_reference) != (
+        _without_reference_challenge_seed(refreshed_reference)
+    ):
+        raise ValueError("task history HBB reference changed fields other than seed")
+    return refreshed
+
+
 def _assert_contract_seed_only_changed(
     original: dict[str, Any], refreshed: dict[str, Any]
 ) -> None:
@@ -594,11 +661,17 @@ def _wait_for_authoritative_contract_seed(
     status_path: Path,
     events_path: Path,
 ) -> tuple[ArtifactBundle, Any]:
-    """Poll the signed task object until legacy random seeds become visible."""
+    """Poll signed contract, then verified task history after URL expiry."""
+    task = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
+    contract_url_deadline, contract_deadline_source = _presigned_url_deadline(
+        str(task["contract_url"])
+    )
     state.update(
         {
             "state": "waiting_for_contract_seed",
             "contract_poll_started_at": _utc_now(),
+            "contract_url_deadline_source": contract_deadline_source,
+            "contract_seed_source": "signed-contract",
         }
     )
     _write_json(status_path, state)
@@ -607,6 +680,10 @@ def _wait_for_authoritative_contract_seed(
     last_seed_raw: Any = artifacts.contract.get("seed")
     last_error: str | None = None
     last_live_labels: tuple[str, ...] | None = None
+    history_candidate: tuple[int, ...] | None = None
+    history_confirmations = 0
+    history_attempts = 0
+    history_fallback_started = False
     while True:
         live_labels = tuple(
             bridge.label for bridge in bridges if not bridge.done.is_set()
@@ -617,8 +694,22 @@ def _wait_for_authoritative_contract_seed(
                 f"were published: {[bridge.snapshot() for bridge in bridges]}"
             )
         attempt += 1
+        signed_contract_expired = time.monotonic() >= contract_url_deadline
         try:
-            refreshed = _fetch_refreshed_contract(task_dir)
+            if signed_contract_expired:
+                if not history_fallback_started:
+                    history_fallback_started = True
+                    state["contract_seed_source"] = "task-history-expiry-fallback"
+                    state["task_history_fallback_started_at"] = _utc_now()
+                    _append_event(
+                        events_path,
+                        "task_history_seed_fallback_started",
+                        reason="signed contract URL expired",
+                    )
+                history_attempts += 1
+                refreshed = _fetch_task_history_contract(task_dir)
+            else:
+                refreshed = _fetch_refreshed_contract(task_dir)
         except Exception as error:
             # A transient task-object read must not abandon a surviving PUT.
             # The terminal condition is loss of all streams, recorded above.
@@ -632,22 +723,65 @@ def _wait_for_authoritative_contract_seed(
             seed_plan = resolve_seed_plan(refreshed, task_dir.name)
             last_error = None
             if seed_plan.mode == "contract-authoritative":
-                refreshed_artifacts = replace(artifacts, contract=refreshed)
-                _write_json(task_dir / "refreshed_contract.json", refreshed)
-                _append_event(
-                    events_path,
-                    "authoritative_contract_seed_observed",
-                    contract_poll_attempts=attempt,
-                    round_seeds=list(seed_plan.optimization_seeds),
-                    seed_policy=seed_plan.as_dict(),
-                )
-                return refreshed_artifacts, seed_plan
+                confirmed = True
+                if signed_contract_expired:
+                    observed = tuple(seed_plan.optimization_seeds)
+                    if observed == history_candidate:
+                        history_confirmations += 1
+                    else:
+                        history_candidate = observed
+                        history_confirmations = 1
+                    state["task_history_seed_candidate"] = list(observed)
+                    state["task_history_seed_confirmations"] = history_confirmations
+                    confirmed = (
+                        history_confirmations
+                        >= TASK_HISTORY_REQUIRED_CONFIRMATIONS
+                    )
+                if confirmed:
+                    source = (
+                        "task-history-expiry-fallback"
+                        if signed_contract_expired
+                        else "signed-contract"
+                    )
+                    if signed_contract_expired:
+                        seed_plan = replace(
+                            seed_plan,
+                            source=source,
+                            reason=(
+                                "non-placeholder seed recovered from verified task "
+                                "history after the signed contract URL expired"
+                            ),
+                        )
+                    refreshed_artifacts = replace(artifacts, contract=refreshed)
+                    _write_json(task_dir / "refreshed_contract.json", refreshed)
+                    if signed_contract_expired:
+                        _write_json(task_dir / "task_history_contract.json", refreshed)
+                    _append_event(
+                        events_path,
+                        "authoritative_contract_seed_observed",
+                        source=source,
+                        contract_poll_attempts=attempt,
+                        task_history_attempts=history_attempts,
+                        task_history_confirmations=history_confirmations,
+                        round_seeds=list(seed_plan.optimization_seeds),
+                        seed_policy=seed_plan.as_dict(),
+                    )
+                    state["contract_seed_source"] = source
+                    return refreshed_artifacts, seed_plan
+            elif signed_contract_expired:
+                # A placeholder between candidate reads breaks the consecutive
+                # observation requirement.
+                history_candidate = None
+                history_confirmations = 0
+                state.pop("task_history_seed_candidate", None)
 
         snapshots = [bridge.snapshot() for bridge in bridges]
         state.update(
             {
                 "last_observed_at": _utc_now(),
                 "contract_poll_attempts": attempt,
+                "task_history_poll_attempts": history_attempts,
+                "task_history_seed_confirmations": history_confirmations,
                 "last_contract_seed_raw": last_seed_raw,
                 "last_contract_poll_error": last_error,
                 "stream_results": snapshots,

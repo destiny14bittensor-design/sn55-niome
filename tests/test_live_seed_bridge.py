@@ -14,6 +14,7 @@ from tools.live_seed_bridge import (
     _consistency_sample_from_payload,
     _envelope_seconds_remaining,
     _fetch_refreshed_contract,
+    _fetch_task_history_contract,
     _failure_category,
     _quarantine_inherited_unknown_seed_tasks,
     _round_coordinates,
@@ -189,6 +190,102 @@ def test_refreshed_contract_may_change_only_the_seed():
         _assert_contract_seed_only_changed(original, refreshed)
 
 
+def test_fetch_task_history_contract_exact_matches_and_verifies_reference(
+    tmp_path, monkeypatch
+):
+    task_id = tmp_path.name
+    original = {"seed": 0, "version": "v1", "rules": {"max_experiments": 250}}
+    original_reference = {
+        "challenge": dict(original),
+        "chromosome": "11",
+        "window_id": "HBB_v1",
+    }
+    (tmp_path / "contract.json").write_text(json.dumps(original))
+    (tmp_path / "hbb_reference.json").write_text(json.dumps(original_reference))
+    refreshed = {**original, "seed": "519,253,867"}
+    payload = {
+        "items": [
+            {"id": "another-task", "content": {}},
+            {
+                "id": task_id,
+                "content": {
+                    "contract": refreshed,
+                    "hbb_reference": {
+                        **original_reference,
+                        "challenge": dict(refreshed),
+                    },
+                },
+            },
+        ]
+    }
+    observed = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read():
+            return json.dumps(payload).encode()
+
+    def fake_urlopen(request, timeout):
+        observed["url"] = request.full_url
+        observed["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(bridge_module, "urlopen", fake_urlopen)
+
+    assert _fetch_task_history_contract(tmp_path) == refreshed
+    assert "page=1" in observed["url"]
+    assert f"per_page={bridge_module.TASK_HISTORY_PAGE_SIZE}" in observed["url"]
+    assert observed["timeout"] == bridge_module.CONTRACT_HTTP_TIMEOUT_SECONDS
+
+
+def test_fetch_task_history_contract_rejects_non_seed_changes(tmp_path, monkeypatch):
+    task_id = tmp_path.name
+    original = {"seed": 0, "version": "v1"}
+    original_reference = {"challenge": dict(original), "chromosome": "11"}
+    (tmp_path / "contract.json").write_text(json.dumps(original))
+    (tmp_path / "hbb_reference.json").write_text(json.dumps(original_reference))
+    changed = {"seed": "1,2,3", "version": "v2"}
+    payload = {
+        "items": [
+            {
+                "id": task_id,
+                "content": {
+                    "contract": changed,
+                    "hbb_reference": {
+                        "challenge": dict(changed),
+                        "chromosome": "11",
+                    },
+                },
+            }
+        ]
+    }
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read():
+            return json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        bridge_module,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    with pytest.raises(ValueError, match="other than seed"):
+        _fetch_task_history_contract(tmp_path)
+
+
 def test_wait_for_authoritative_contract_seed_ignores_placeholder_then_returns(
     tmp_path, monkeypatch
 ):
@@ -205,11 +302,19 @@ def test_wait_for_authoritative_contract_seed_ignores_placeholder_then_returns(
             {"seed": "999,668,630", "version": "v1"},
         ]
     )
+    (tmp_path / "task.json").write_text(
+        json.dumps({"contract_url": "https://bucket.example/contract.json"})
+    )
 
     monkeypatch.setattr(
         bridge_module,
         "_fetch_refreshed_contract",
         lambda _task_dir: next(responses),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "_presigned_url_deadline",
+        lambda _url: (time.monotonic() + 60.0, "test"),
     )
     monkeypatch.setattr(bridge_module.time, "sleep", lambda _seconds: None)
 
@@ -240,6 +345,72 @@ def test_wait_for_authoritative_contract_seed_ignores_placeholder_then_returns(
     assert "authoritative_contract_seed_observed" in (
         tmp_path / "seed_bridge_events.jsonl"
     ).read_text()
+
+
+def test_wait_uses_verified_task_history_twice_after_signed_url_expiry(
+    tmp_path, monkeypatch
+):
+    artifacts = ArtifactBundle(
+        contract={"seed": 0, "version": "v1"},
+        hbb_reference={"challenge": {"seed": 0, "version": "v1"}},
+        chromosome_11="A",
+        cell_types={},
+        manifest={},
+    )
+    (tmp_path / "task.json").write_text(
+        json.dumps({"contract_url": "https://bucket.example/expired-contract.json"})
+    )
+    refreshed = {"seed": "519,253,867", "version": "v1"}
+    history_responses = iter(
+        [refreshed, {"seed": 0, "version": "v1"}, refreshed, refreshed]
+    )
+    history_calls = []
+
+    monkeypatch.setattr(
+        bridge_module,
+        "_presigned_url_deadline",
+        lambda _url: (time.monotonic() - 1.0, "aws-query-v4"),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "_fetch_refreshed_contract",
+        lambda _task_dir: pytest.fail("expired signed URL must not be fetched"),
+    )
+
+    def fake_history(_task_dir):
+        history_calls.append(True)
+        return dict(next(history_responses))
+
+    monkeypatch.setattr(bridge_module, "_fetch_task_history_contract", fake_history)
+    monkeypatch.setattr(bridge_module.time, "sleep", lambda _seconds: None)
+
+    class FakeBridge:
+        label = "64kib-primary"
+        done = threading.Event()
+
+        @staticmethod
+        def snapshot():
+            return {"label": "64kib-primary", "state": "streaming"}
+
+    state = {}
+    observed_artifacts, seed_plan = _wait_for_authoritative_contract_seed(
+        task_dir=tmp_path,
+        artifacts=artifacts,
+        bridges=[FakeBridge()],
+        state=state,
+        status_path=tmp_path / "seed_bridge_status.json",
+        events_path=tmp_path / "seed_bridge_events.jsonl",
+    )
+
+    assert len(history_calls) == 4
+    assert observed_artifacts.contract == refreshed
+    assert seed_plan.optimization_seeds == (519, 253, 867)
+    assert seed_plan.source == "task-history-expiry-fallback"
+    assert state["contract_seed_source"] == "task-history-expiry-fallback"
+    assert json.loads((tmp_path / "task_history_contract.json").read_text()) == refreshed
+    events = (tmp_path / "seed_bridge_events.jsonl").read_text()
+    assert "task_history_seed_fallback_started" in events
+    assert '"source": "task-history-expiry-fallback"' in events
 
 
 def test_submission_tail_completes_streamed_json_list():
