@@ -150,6 +150,24 @@ def test_official_score_is_ranked_and_compared_to_local(tmp_path: Path):
     assert "score_mismatch" not in {alert["code"] for alert in current["alerts"]}
 
 
+def test_local_validation_cache_invalidates_when_artifact_changes(tmp_path: Path):
+    task = make_active_task(tmp_path)
+    validation = task / "seed_bridge_local_validation.json"
+    write_json(validation, {
+        "final_score": 100.0,
+        "breakdown": {"consistency_factor": 0.75},
+    })
+    assert build(tmp_path)["current"]["local"]["score"] == 100.0
+
+    write_json(validation, {
+        "final_score": 200.0,
+        "breakdown": {"consistency_factor": 0.80},
+    })
+    current = build(tmp_path)["current"]
+    assert current["local"]["score"] == 200.0
+    assert current["local"]["breakdown"]["consistency_factor"] == 0.80
+
+
 def test_unknown_seed_holdout_is_labeled_and_not_compared_as_exact(tmp_path: Path):
     task = make_active_task(tmp_path)
     write_json(task / "local_validation.json", {

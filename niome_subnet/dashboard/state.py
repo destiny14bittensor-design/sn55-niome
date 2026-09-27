@@ -8,6 +8,7 @@ envelope because that file contains a presigned S3 URL.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 import json
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,44 @@ def _record_count(value: Any) -> int | None:
     return None
 
 
+@lru_cache(maxsize=512)
+def _local_summary_at_version(
+    source: str,
+    path_text: str,
+    mtime_ns: int,
+    size: int,
+) -> dict[str, Any] | None:
+    """Parse a large immutable artifact once and retain only its summary."""
+    del mtime_ns, size
+    data = safe_json(Path(path_text))
+    if not isinstance(data, dict):
+        return None
+    return {
+        "available": True,
+        "source": source,
+        "score": _number(data.get("final_score")),
+        "score_semantics": data.get("score_semantics", "legacy-exact-replay"),
+        "comparable_to_official": bool(data.get("comparable_to_official", True)),
+        "seed_policy": dict(data.get("seed_policy") or {}),
+        "breakdown": dict(data.get("breakdown") or {}),
+        "valid_experiments": _record_count(data.get("valid_experiments")),
+        "invalid_experiments": _record_count(data.get("invalid_experiments")),
+    }
+
+
+def _cached_local_summary(source: str, path: Path) -> dict[str, Any] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return _local_summary_at_version(
+        source,
+        str(path),
+        stat.st_mtime_ns,
+        stat.st_size,
+    )
+
+
 def _received_at(task_dir: Path, status: dict[str, Any], task: dict[str, Any]) -> datetime:
     parsed = parse_time(status.get("received_at")) or parse_time(task.get("received_at"))
     if parsed:
@@ -125,25 +164,16 @@ def _local_summary(task_dir: Path) -> dict[str, Any]:
         ("safe_submission", task_dir / "local_validation.json"),
     )
     for source, path in choices:
-        data = safe_json(path)
-        if isinstance(data, dict):
+        # Exact-validation payloads are commonly around 1 MiB and are immutable
+        # once atomically published. Dashboard refreshes only need a handful of
+        # scalar fields, so avoid reparsing every historical payload every two
+        # seconds. The file version remains part of the cache key.
+        summary = _cached_local_summary(source, path)
+        if summary is not None:
             return {
-                "available": True,
-                "source": source,
-                "score": _number(data.get("final_score")),
-                "score_semantics": data.get(
-                    "score_semantics", "legacy-exact-replay"
-                ),
-                "comparable_to_official": bool(
-                    data.get("comparable_to_official", True)
-                ),
-                "seed_policy": dict(data.get("seed_policy") or {}),
-                "breakdown": dict(data.get("breakdown") or {}),
-                # The validator artifacts contain the complete experiment lists.
-                # The dashboard only needs their counts; returning the records
-                # would add ~150 KiB to every live event.
-                "valid_experiments": _record_count(data.get("valid_experiments")),
-                "invalid_experiments": _record_count(data.get("invalid_experiments")),
+                **summary,
+                "seed_policy": dict(summary["seed_policy"]),
+                "breakdown": dict(summary["breakdown"]),
             }
     return {
         "available": False,
