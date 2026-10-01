@@ -13,9 +13,12 @@ from tools.live_seed_bridge import (
     _choose_exact_consistency_candidate,
     _consistency_sample_from_payload,
     _envelope_seconds_remaining,
+    _fetch_authorized_validator_contract,
     _fetch_refreshed_contract,
     _fetch_task_history_contract,
     _failure_category,
+    _handle_envelope,
+    _planned_stream_total_bytes,
     _quarantine_inherited_unknown_seed_tasks,
     _round_coordinates,
     _standby_start_delay,
@@ -23,6 +26,157 @@ from tools.live_seed_bridge import (
     _timing_probe,
     _wait_for_authoritative_contract_seed,
 )
+
+
+def test_authorized_validator_contract_uses_owned_wallet_and_exact_task(
+    tmp_path, monkeypatch
+):
+    task_dir = tmp_path / "task-a"
+    task_dir.mkdir()
+    (task_dir / "contract.json").write_text(
+        json.dumps({"seed": 0, "version": "v1"})
+    )
+
+    class FakeHotkey:
+        ss58_address = "owned-validator-hotkey"
+
+        @staticmethod
+        def sign(message):
+            assert b'"netuid":"55"' in message
+            assert b'"hotkey":"owned-validator-hotkey"' in message
+            return b"\xab\xcd"
+
+    class FakeWallet:
+        hotkey = FakeHotkey()
+
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_NAME", "validator-cold"
+    )
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_HOTKEY", "validator-hot"
+    )
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_PATH", "/owned/wallets"
+    )
+    monkeypatch.setattr(
+        bridge_module, "_AUTHORIZED_VALIDATOR_WALLET", FakeWallet()
+    )
+
+    requests = []
+    payloads = iter(
+        [
+            {
+                "task_id": "task-a",
+                "contract_url": "https://bucket.example/private-contract.json",
+            },
+            {"seed": "218,229,395", "version": "v1"},
+        ]
+    )
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def fake_urlopen(request, **_kwargs):
+        requests.append(request)
+        return FakeResponse(next(payloads))
+
+    monkeypatch.setattr(bridge_module, "urlopen", fake_urlopen)
+    contract = _fetch_authorized_validator_contract(task_dir)
+
+    assert contract["seed"] == "218,229,395"
+    assert requests[0].full_url == bridge_module.TASK_URL
+    assert requests[0].get_header("X-hotkey") == "owned-validator-hotkey"
+    assert requests[0].get_header("X-netuid") == "55"
+    assert requests[0].get_header("X-signature") == "abcd"
+    assert requests[1].full_url == (
+        "https://bucket.example/private-contract.json"
+    )
+
+
+def test_authorized_validator_contract_rejects_other_task(tmp_path, monkeypatch):
+    task_dir = tmp_path / "task-a"
+    task_dir.mkdir()
+
+    class FakeHotkey:
+        ss58_address = "owned-validator-hotkey"
+
+        @staticmethod
+        def sign(_message):
+            return b"\x01"
+
+    class FakeWallet:
+        hotkey = FakeHotkey()
+
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_NAME", "validator-cold"
+    )
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_HOTKEY", "validator-hot"
+    )
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_PATH", "/owned/wallets"
+    )
+    monkeypatch.setattr(
+        bridge_module, "_AUTHORIZED_VALIDATOR_WALLET", FakeWallet()
+    )
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read():
+            return json.dumps(
+                {
+                    "task_id": "task-b",
+                    "contract_url": "https://bucket.example/contract.json",
+                }
+            ).encode()
+
+    monkeypatch.setattr(
+        bridge_module,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    with pytest.raises(ValueError, match="UUID"):
+        _fetch_authorized_validator_contract(task_dir)
+
+
+def test_same_round_overwrite_is_disabled_without_opening_put(tmp_path, monkeypatch):
+    task_dir = tmp_path / "task-a"
+    task_dir.mkdir()
+    envelope = task_dir / "request_envelope.json"
+    envelope.write_text("{}")
+
+    monkeypatch.setattr(bridge_module, "SAME_ROUND_OVERWRITE_ENABLED", False)
+
+    class ForbiddenSlowPut:
+        def __init__(self, *_args, **_kwargs):
+            pytest.fail("disabled same-round path must not open a PUT")
+
+    monkeypatch.setattr(bridge_module, "SlowPut", ForbiddenSlowPut)
+    _handle_envelope(envelope)
+
+    status = json.loads((task_dir / "seed_bridge_status.json").read_text())
+    assert status["state"] == "disabled_same_round_overwrite"
+    assert status["active_put_count"] == 0
+    assert status["submission_attempted"] is False
+    assert "same_round_overwrite_disabled" in (
+        task_dir / "seed_bridge_events.jsonl"
+    ).read_text()
 
 
 def test_consistency_history_accepts_only_contract_authoritative_exact_replay():
@@ -382,6 +536,73 @@ def test_wait_for_authoritative_contract_seed_ignores_placeholder_then_returns(
     ).read_text()
 
 
+def test_wait_prefers_authorized_validator_source_at_validation(
+    tmp_path, monkeypatch
+):
+    artifacts = ArtifactBundle(
+        contract={"seed": 0, "version": "v1"},
+        hbb_reference={},
+        chromosome_11="A",
+        cell_types={},
+        manifest={},
+    )
+    (tmp_path / "task.json").write_text(
+        json.dumps({"contract_url": "https://bucket.example/contract.json"})
+    )
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_NAME", "validator-cold"
+    )
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_HOTKEY", "validator-hot"
+    )
+    monkeypatch.setattr(
+        bridge_module, "AUTHORIZED_VALIDATOR_WALLET_PATH", "/owned/wallets"
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "_fetch_authorized_validator_contract",
+        lambda _task_dir: {"seed": "729,862,298", "version": "v1"},
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "_fetch_refreshed_contract",
+        lambda _task_dir: pytest.fail("authorized source must be preferred"),
+    )
+    monkeypatch.setattr(
+        bridge_module,
+        "_presigned_url_deadline",
+        lambda _url: (time.monotonic() + 60.0, "test"),
+    )
+
+    class FakeSubtensor:
+        block = 100
+
+    class FakeBridge:
+        label = "64kib-primary"
+        done = threading.Event()
+
+        @staticmethod
+        def snapshot():
+            return {"label": "64kib-primary", "state": "streaming"}
+
+    state = {}
+    observed, seed_plan = _wait_for_authoritative_contract_seed(
+        task_dir=tmp_path,
+        artifacts=artifacts,
+        bridges=[FakeBridge()],
+        subtensor=FakeSubtensor(),
+        validation_block=100,
+        state=state,
+        status_path=tmp_path / "seed_bridge_status.json",
+        events_path=tmp_path / "seed_bridge_events.jsonl",
+    )
+
+    assert observed.contract["seed"] == "729,862,298"
+    assert seed_plan.source == "authorized-validator-current-task"
+    assert state["contract_seed_source"] == "authorized-validator-current-task"
+    assert state["authorized_validator_seed_source_attempts"] == 1
+
+
 def test_wait_uses_verified_task_history_twice_after_signed_url_expiry(
     tmp_path, monkeypatch
 ):
@@ -494,6 +715,36 @@ def test_round_coordinates_match_validator_seed_and_validation_windows():
     )
 
 
+def test_planned_stream_body_tracks_round_position_and_reserves_completion():
+    early = _planned_stream_total_bytes(
+        current_block=100,
+        validation_block=500,
+        stream_bytes=64 * 1024,
+        maximum_total_bytes=576 * 1024 * 1024,
+    )
+    late = _planned_stream_total_bytes(
+        current_block=490,
+        validation_block=500,
+        stream_bytes=64 * 1024,
+        maximum_total_bytes=576 * 1024 * 1024,
+    )
+
+    assert early > late
+    assert late >= bridge_module.PLANNED_COMPLETION_RESERVE_BYTES
+    assert early % bridge_module.PADDING_CHUNK_BYTES == 0
+    assert late % bridge_module.PADDING_CHUNK_BYTES == 0
+
+
+def test_planned_stream_body_never_exceeds_profile_maximum():
+    maximum = 80 * 1024 * 1024
+    assert _planned_stream_total_bytes(
+        current_block=0,
+        validation_block=100_000,
+        stream_bytes=64 * 1024,
+        maximum_total_bytes=maximum,
+    ) == maximum
+
+
 def test_timing_probe_reports_required_completion_rate():
     class FakeBridge:
         label = "64kib-primary"
@@ -546,6 +797,7 @@ def test_envelope_fallback_ttl_is_anchored_to_file_receipt(tmp_path):
 
 def test_slow_put_sends_one_valid_fixed_length_json_body(monkeypatch):
     connections = []
+    completion_sleeps = []
 
     class FakeResponse:
         status = 200
@@ -587,6 +839,7 @@ def test_slow_put_sends_one_valid_fixed_length_json_body(monkeypatch):
             pass
 
     monkeypatch.setattr(bridge_module.http.client, "HTTPSConnection", FakeConnection)
+    monkeypatch.setattr(bridge_module.time, "sleep", completion_sleeps.append)
     submission = [{"experiment_id": "a"}]
     raw = json.dumps(submission, separators=(",", ":")).encode()
     total_bytes = 2 * bridge_module.PADDING_CHUNK_BYTES + 256
@@ -595,6 +848,7 @@ def test_slow_put_sends_one_valid_fixed_length_json_body(monkeypatch):
         total_bytes=total_bytes,
         stream_bytes=8,
         stream_interval_seconds=0.001,
+        completion_interval_seconds=0.25,
         label="test",
     )
     put.start()
@@ -615,6 +869,11 @@ def test_slow_put_sends_one_valid_fixed_length_json_body(monkeypatch):
     assert len(connection.body) == total_bytes
     assert max(connection.send_sizes) <= bridge_module.PADDING_CHUNK_BYTES
     assert json.loads(connection.body) == submission
+    assert completion_sleeps
+    assert set(completion_sleeps) == {0.25}
+    assert put.result["completion_target_bytes_per_second"] == pytest.approx(
+        bridge_module.PADDING_CHUNK_BYTES / 0.25
+    )
 
 
 def test_slow_put_records_actionable_remote_close_diagnostics(monkeypatch):

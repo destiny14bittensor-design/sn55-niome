@@ -24,6 +24,12 @@ from .fleet import FleetDashboardCollector, MinerLaneConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = REPO_ROOT / "dashboard"
+SEED_RESEARCH_STATE = Path(
+    os.getenv(
+        "NIOME_SEED_RESEARCH_STATE",
+        str(REPO_ROOT / "artifacts" / "research" / "seed_research_state.json"),
+    )
+)
 FLEET_LANES = (
     MinerLaneConfig(
         lane_id="bitcoin1",
@@ -159,6 +165,46 @@ async def federation_sources() -> JSONResponse:
         "version": federation.version,
         "sources": snapshot.get("sources") or [],
     })
+
+
+def load_seed_research_state() -> dict:
+    """Read research status without coupling dashboard uptime to the worker."""
+    try:
+        value = json.loads(SEED_RESEARCH_STATE.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        value = None
+    if isinstance(value, dict):
+        return value
+    return {
+        "schema_version": 1,
+        "generated_at": None,
+        "phase": "waiting_for_automation",
+        "current_action": {
+            "code": "waiting_for_automation",
+            "title": "연구 자동화기 시작 대기",
+            "detail": "상태 파일이 생성되면 단계별 진척이 자동으로 표시됩니다.",
+            "task_id": None,
+            "progress": 0.0,
+        },
+        "targets": {
+            "discovery": 20,
+            "holdout": 5,
+            "probe_verification": 5,
+            "forward_exact": 5,
+        },
+        "dataset": {},
+        "probe": {},
+        "hypothesis": {},
+        "forward": {},
+        "automation": {"supervisor_healthy": False},
+        "recent_rounds": [],
+        "safety": {"submission_writes": False},
+    }
+
+
+@app.get("/api/v1/seed-research/state", include_in_schema=False)
+async def seed_research_state() -> JSONResponse:
+    return JSONResponse(load_seed_research_state())
 
 
 @app.get("/api/v1/tasks/{task_id}", include_in_schema=False)

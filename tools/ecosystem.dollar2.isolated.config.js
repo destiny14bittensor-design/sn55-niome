@@ -11,6 +11,10 @@ module.exports = {
       kill_timeout: 10000,
       env: {
         NIOME_ARTIFACT_ROOT: "/home/administrator/workspace/subnet-niome/artifacts/miners/dollar2",
+        NIOME_ENABLE_UNVERIFIED_SAME_ROUND_OVERWRITE: "false",
+        NIOME_SEED_VALIDATOR_WALLET_NAME: "main",
+        NIOME_SEED_VALIDATOR_WALLET_HOTKEY: "dollar2",
+        NIOME_SEED_VALIDATOR_WALLET_PATH: "/home/administrator/.bittensor/wallets",
         NIOME_EXPLORATION_PROFILE: "5H1jPksvzJuak6P63VAp7QttcRpQ1PuT9BNDyMT3qGEYovdQ",
       },
     },

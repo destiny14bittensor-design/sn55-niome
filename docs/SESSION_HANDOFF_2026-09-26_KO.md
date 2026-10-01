@@ -588,3 +588,109 @@ dashboard identity에 맞게 보존/재작성한다.
 ### 14.5 다음 세션 시작용 한 줄 프롬프트
 
 `/home/administrator/workspace/subnet-niome/docs/SESSION_HANDOFF_2026-09-26_KO.md를 처음부터 끝까지 읽고 Git·PM2·현재 task와 active PUT을 재확인한 뒤, 먼저 여러 공식 라운드의 signed contract·task API·scoreboard·chain·validator 공개 코드를 UTC 타임라인으로 대조하여 seed가 공식 공개·채점되기 전에 권위 있고 허용된 정보만으로 결정되거나 관측될 수 있는지 검증하고, 가능하지 않으면 same-round overwrite 전제를 폐기하는 방향으로 남은 작업을 이어가라.`
+
+## 15. 2026-09-27 seed 공개 가능성 감사 결론
+
+- 최근 공식 라운드 8개에서 공개 `9d9347a` block-hash 알고리즘을 exact replay했으나
+  공식 task seed와 **8/8 불일치**했다.
+- `569500e8…`는 scoreboard `05:54:08.982101 UTC` 뒤 약 134.5초인
+  `05:56:23.525620–05:56:23.983106`에야 task-history에서 nonzero seed가 처음
+  관측됐다. 두 번째 확인은 약 6.16초 뒤였다.
+- `950262bf…`는 scoreboard가 `03:29:37.366506`에 생성된 뒤에도 원본 signed contract
+  polling의 `03:54:51–03:59:27` 마지막 기록까지 seed가 0이었다.
+- 직전 공개 validator `9f3ada4`는 validation 때 task를 다시 받고 contract seed를
+  읽지만 backend seed 생성 규칙은 공개하지 않는다. 최신 공개 `9d9347a`는 chain seed를
+  사용하지만 실제 최근 scoreboard를 재현하지 못한다. chain weight extrinsic에도 task
+  UUID와 seed가 없다.
+- 결론: 현재 허용된 공개 정보만으로 공식 채점 전 seed를 권위 있게 결정하거나 관측하는
+  경로는 없다. 상세 표와 재현 근거는 `docs/seed_observability_audit_2026-09-27.md`에 있다.
+- same-round overwrite는 코드와 PM2 config에서 기본 비활성화했다.
+  `NIOME_ENABLE_UNVERIFIED_SAME_ROUND_OVERWRITE=false`가 production 값이며, 새 bridge는
+  PUT을 열지 않고 `disabled_same_round_overwrite` terminal 상태를 기록한다.
+- 이 기록 시점 active PUT이 있는 기존 bridge는 재시작하지 않는다. 모두 terminal/drain된
+  뒤에만 새 코드를 한 lane씩 로드한다.
+- 전체 테스트는 `.venv/bin/python -m pytest -q` 기준 **102 passed in 51.41s**다.
+- active PUT이 없던 bitcoin1과 bitcoin2는 miner stop → bridge restart → miner start 순으로
+  새 정책을 로드하고 `pm2 save`했다. bridge PID는 각각 `2965188`, `2965286`이며 시작
+  로그에서 `mode=disabled-no-pre-score-authoritative-seed`를 확인했다. 두 miner의 8091,
+  8092 listen도 복구됐다.
+- hype1(PID `2916811`)과 hype2(PID `2913177`)는 task `1c916bd4…`의 두 64 KiB/s PUT을
+  각각 유지 중이므로 재시작하지 않았다. 마지막 확인 `06:39:45–06:39:46 UTC`에 네
+  stream 모두 `streaming`이고 byte count가 계속 증가했다. terminal/drain 뒤 같은
+  방식으로 두 lane을 전환해야 한다.
+
+## 16. 2026-10-01 MT19937 2라운드 결합 탐색 고도화
+
+- 입력은 endpoint-window 안정화 Discovery 자료
+  `artifacts/research/preseed_numpy_shuffle_constraints_window_stable.json`이다.
+  첫 두 라운드는 각각 `256→251`(누락 5), `256→148`(누락 108) 관측이다.
+- 누락 token을 `2^missing` 상태로 열거하던 기존 부분수열 인코딩 대신
+  `add_observed_domain_subsequence()`를 추가했다. 셔플 출력의 각 위치를
+  `삭제` 또는 `다음 관측 domain 소비`로 전이시키고 마지막 cursor가 관측 길이와
+  같도록 한다. 따라서 관측열이 전체 permutation의 정확한 부분수열이라는 조건을
+  `O(n*m)` 상태로 보존한다.
+- 합성 검증에서 올바른 삭제열은 SAT, 순서를 바꾼 열과 domain multiset을 초과한 열은
+  UNSAT였다. 관련 테스트는 최종 `63 passed`다.
+- 실데이터 두 번째 라운드 인코딩 규모는 16,241 상태, 32,224 전이였다.
+  첫 라운드 full network + 둘째 linear-domain 조합은 1,546,853 변수,
+  7,371,672 CNF 절, 11,500 XOR 절이며 build 8.98초였다.
+- 고확률 rejection 프로필 8개, 첫 선택 `j255=175` 고정 8개, 첫 라운드 tuple + 둘째
+  linear-domain 프로필 16개는 모두 제한시간 내 `UNKNOWN`이었다. 이는 UNSAT 판정이나
+  가설 기각이 아니다.
+- exact corridor rank 1을 고정한 dense 모델도 `UNKNOWN`이었다. reject 부등식을 lazy로
+  뺀 완화 모델, 2-bit MT state 완전분할 4개도 모두 `UNKNOWN`이므로 reject 부등식이나
+  단순 state bit가 현재의 주 병목은 아니다.
+- 가장 작은 조합은 첫 라운드 exact prefix tuple + 둘째 linear-domain + exact corridor로
+  430,157 변수, 2,312,713 CNF 절, 6,990 XOR 절이었지만 120초 내 `UNKNOWN`이었다.
+  sparse/4-thread 비교는 pycryptosat가 내부 시간 제한을 지키지 않아 약 3분 뒤 해당
+  실험 프로세스만 종료했으며, 후보로 해석할 결과는 만들지 않았다.
+- `preseed_mt_xorsat_joint.py`와 `preseed_mt_fixed_profile.py`에 다음 재현 옵션을 추가했다.
+  - `--max-linear-domain-rounds`
+  - `--full-shuffle-task` (fixed-profile에도 추가)
+  - `--fixed-accepted-draw` (xorsat에도 추가)
+- 대표 산출물:
+  - `artifacts/research/preseed_mt_xorsat_window_stable_2round_linear_domain_top8.json`
+  - `artifacts/research/preseed_mt_xorsat_window_stable_tuple1_linear2_top16.json`
+  - `artifacts/research/preseed_mt_fixed_profile_window_stable_c1_r2_linear_domain_dense.json`
+  - `artifacts/research/preseed_mt_fixed_profile_window_stable_c1_tuple1_linear2_lazy.json`
+- Holdout seed label은 열지 않았고, miner/bridge/제출에는 쓰지 않았다. 현재 recovered state,
+  예측 seed, 승격 가능한 generator candidate는 아직 없다.
+- 다음 우선순위는 더 긴 동일 모델 반복이 아니라 (1) OS-level hard timeout을 적용한
+  choice/corridor 완전분할, (2) 첫 라운드 4-choice tuple을 MT 선형 전처리에 직접 넣어
+  full permutation CNF 이전에 state rank를 낮추는 방식, (3) SAT가 나온 경우에만 셋째
+  Discovery 라운드 blind replay다.
+
+## 17. 2026-10-01 최종 seed 도달시간 재평가
+
+- uint32 초기화 가설은 계산 미완료가 아니다. NumPy RandomState와 Python Random의
+  `2^32` 초기화 공간을 이미 전부 검사했고 현재 Discovery 연결 가설은 exact hit 0으로
+  배제됐다. per-round NumPy seed preimage도 `2^32` 전체를 검사했다.
+- persistent MT19937 합성 감사에서는 rejection 위치와 exact shuffle choice를 알 때
+  17라운드, 4,335 accepted draw, 30,481 bit equation에서 유효 상태 rank 19,937을 채우고
+  미래 32 word를 exact 예측했다. 이것이 현재 복구 목표의 정보량 기준이다.
+- 실제 안정화 corpus의 첫 16 Discovery 라운드를 각각 10,000개의 UID permutation으로
+  완성하여 choice bit 분포를 측정했다.
+  - 총 표본: 160,000 completions
+  - 표본 전체에서 변하지 않은 bit: 5
+  - 99% 이상 한쪽으로 편향된 bit: 68
+  - 첫 라운드를 100,000회로 재검사해도 stable 1, 99% biased 22였다.
+- 정확 forced-bit SAT projector도 구현하고 합성 검증했다. 첫 실제 라운드 64 bit probe는
+  반대극성 질의 64개 중 63개가 시간제한 `UNKNOWN`, forced proof 0이었다. 모델열거도
+  두 번째 completion을 제한시간 안에 얻지 못했다. 따라서 projector는 정확하지만 현재
+  자료에 대한 주 복구기로는 계산효율이 없다.
+- 결론: 현재 corpus만 놓고 verified final seed까지의 유한 ETA를 제시할 수 없다. 같은
+  SAT를 오래 돌리는 것은 성공을 보장하지 않는다. 병목은 CPU 시간이 아니라 누락 UID의
+  insertion 위치와 unknown rejection alignment가 만드는 식별 불충분이다.
+- 낙관적 시간 하한은 새 계측이 exact에 가까운 17개 연속 shuffle을 제공한다는 강한
+  전제에서 계산한다. 현재 task 주기 약 2시간 24분이면 자료 수집만 약 41시간이며,
+  state recovery/replay 1–3시간과 다음 blind round 확인 약 2시간 24분을 더해 약
+  **44–48시간**이다. 현재와 같은 partial endpoint 품질이 계속되면 이 하한은 성립하지
+  않으며 ETA는 미정이다.
+- 새 도구와 산출물:
+  - `tools/preseed_shuffle_forced_bits.py`
+  - `tools/preseed_shuffle_sampled_bits.py`
+  - `artifacts/research/preseed_shuffle_forced_bits_f05_enum64.json`
+  - `artifacts/research/preseed_shuffle_sampled_bits_f05_100k.json`
+  - `artifacts/research/preseed_shuffle_sampled_bits_discovery16_10k.json`
+- 어떤 sampled stable/biased bit도 사실로 승격하지 않았다. verified seed candidate는 여전히
+  0개이며 Holdout seed label, miner/bridge, 제출에는 접근하지 않았다.

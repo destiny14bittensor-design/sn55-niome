@@ -478,17 +478,27 @@ class FleetDashboardCollector:
             current = snapshot.get("current") or {}
             task_id = current.get("task_id")
             validation = (current.get("bridge") or {}).get("validation_block")
+            received_at = parse_time(current.get("received_at"))
+            mature_without_validation = bool(
+                received_at
+                and (datetime.now(timezone.utc) - received_at).total_seconds() >= 3600
+            )
             if (
                 task_id
                 and task_id not in self.scoreboards
-                and isinstance(validation, int)
-                and self.current_block is not None
-                and self.current_block >= validation
+                and (
+                    (
+                        isinstance(validation, int)
+                        and self.current_block is not None
+                        and self.current_block >= validation
+                    )
+                    or mature_without_validation
+                )
                 and now_mono - self._score_attempted_at.get(str(task_id), 0.0) >= 15
             ):
                 return str(task_id)
         for snapshot in self._lane_snapshots.values():
-            for item in (snapshot.get("history") or [])[1:5]:
+            for item in (snapshot.get("history") or [])[:5]:
                 task_id = item.get("task_id")
                 if (
                     task_id

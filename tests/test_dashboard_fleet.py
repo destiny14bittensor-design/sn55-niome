@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from niome_subnet.dashboard.fleet import MinerLaneConfig, build_fleet_state
+from niome_subnet.dashboard.fleet import (
+    FleetDashboardCollector,
+    MinerLaneConfig,
+    build_fleet_state,
+)
 from niome_subnet.dashboard.server import FLEET_LANES
 
 
@@ -136,3 +140,35 @@ def test_live_fleet_keeps_only_bitcoin1_as_baseline() -> None:
         "hype1": "exploration",
         "hype2": "exploration",
     }
+
+
+def test_score_poll_uses_mature_current_task_without_validation_block() -> None:
+    collector = FleetDashboardCollector(
+        lanes=[lane(1)], score_url="https://example.invalid/scores"
+    )
+    collector._lane_snapshots = {
+        "dollar1": {
+            "current": {
+                "task_id": "mature-current",
+                "received_at": "2020-01-01T00:00:00+00:00",
+                "bridge": {"validation_block": None},
+            },
+            "history": [],
+        }
+    }
+
+    assert collector._next_score_task(1000.0) == "mature-current"
+
+
+def test_score_poll_does_not_skip_first_history_item() -> None:
+    collector = FleetDashboardCollector(
+        lanes=[lane(1)], score_url="https://example.invalid/scores"
+    )
+    collector._lane_snapshots = {
+        "dollar1": {
+            "current": {},
+            "history": [{"task_id": "latest-history"}, {"task_id": "older"}],
+        }
+    }
+
+    assert collector._next_score_task(1000.0) == "latest-history"

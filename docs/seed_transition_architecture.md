@@ -1,5 +1,67 @@
 # Seed-generation transition architecture
 
+## 2026-09-27 authorized validator-current-task route
+
+The miner-visible signed contract is no longer a pre-score seed authority. In
+the fully observed `f7e66c63` round it stayed at seed `0` through expiry, while
+an exact replay proved that the eventual `729,862,298` seed triplet was used by
+the official scorer. The public task API and W&B log exposed that triplet only
+after scoring.
+
+The backend does, however, expose a normal signed `GET /api/v3/tasks/current`
+route to sufficiently staked validator hotkeys. A request signed by one of our
+registered miner hotkeys was authenticated and rejected specifically with
+`403 Insufficient validator alpha stake`. This establishes an authorized
+control boundary rather than an undiscoverable endpoint.
+
+`tools/live_seed_bridge.py` now supports this route only when all three local
+wallet settings are explicit:
+
+```text
+NIOME_SEED_VALIDATOR_WALLET_NAME
+NIOME_SEED_VALIDATOR_WALLET_HOTKEY
+NIOME_SEED_VALIDATOR_WALLET_PATH
+```
+
+The bridge waits until the validation block, signs the backend's canonical
+request with that locally owned hotkey, requires an exact task UUID match,
+downloads the returned contract, and verifies that only `seed` differs from
+the miner-captured contract. It never accepts API/W&B credentials or secrets
+found in logs. A backend `401/403` disables this source for the task rather
+than repeatedly probing it. The existing
+`NIOME_ENABLE_UNVERIFIED_SAME_ROUND_OVERWRITE` gate remains off by default, so
+adding wallet settings alone cannot open a PUT or replace a submission.
+
+This path still requires a hotkey that the backend accepts as a sufficiently
+staked validator and an already-open slow PUT. Acquiring or moving stake is a
+financial chain operation and is not performed by deployment code.
+
+Live threshold probing on 2026-09-27 consolidated the locally owned SN55 alpha
+onto `main/dollar2` in three same-subnet moves. At `1,791.913111858` alpha the
+hotkey became UID 243's validator-permit holder at the next subnet step
+(`9160252`), proving that permit acquisition and backend authorization are
+separate gates. Signed `GET /api/v3/tasks/current` requests remained `403
+Insufficient validator alpha stake` for more than five minutes after the permit
+transition. The backend's direct-alpha threshold is therefore strictly above
+`1,791.913111858`; its exact value is not public.
+
+### Slow-PUT completion control
+
+The earlier fixed 576 MiB reservations left roughly 122–230 MiB to transmit
+after building a seed-aware submission. Those tails were flushed without
+pacing, produced aggregate bursts of roughly 6.9–20.6 MiB/s, and all eight
+observed streams ended in S3 `503 SlowDown` responses. The bridge now sizes
+each reservation from the live block distance to validation, plus a
+three-minute build allowance and a 64 MiB completion reserve. The maximum is
+still 576 MiB, so an unusually early request cannot exhaust the body.
+
+After inserting the JSON tail, padding is sent in 1 MiB chunks at a target of
+1 MiB/s. Only the primary is completed; the standby remains slow unless the
+primary fails. The completion timeout is calculated from the actual remaining
+bytes instead of the former fixed 180 seconds. This bounds the final S3 rate
+while preserving enough time to fail over during the validator's scoring
+window.
+
 ## 2026-09-26 late-contract rollback confirmed
 
 This section supersedes the chain-authoritative cutover section below. The
@@ -251,6 +313,24 @@ is available only behind the explicit provisional trust switch.
 6. A refreshed contract must be byte-equivalent in meaning except for `seed`.
 7. Every artifact records the selected policy, seed source, score semantics,
    and evaluation seeds for later replay.
+
+## Discovery shuffle constraint research (2026-10-01)
+
+Large endpoint-log gaps are now encoded by a linear delete-to-observed domain
+automaton. Given the complete symbolic Fisher-Yates output, every final
+position either consumes the next observed endpoint domain or is deleted. The
+only accepting state has consumed the complete observed sequence. This is an
+exact subsequence condition, including repeated and ambiguous endpoint groups,
+but uses O(output length × observed length) states instead of enumerating the
+2^missing omitted-token subsets.
+
+The second stable Discovery round has 256 initial UIDs, 148 observations and
+108 omissions. Its automaton uses 16,241 states and 32,224 transitions. It can
+be selected with `--max-linear-domain-rounds` and `--full-shuffle-task` in both
+the broad XOR-alignment and fixed-rejection-profile tools. These constraints
+remain research-only: they do not read Holdout labels, persist recovered MT
+state, or write submissions. A SAT witness must still replay an excluded
+Discovery round exactly before it can be promoted as a generator candidate.
 
 ## Rollout and rollback
 

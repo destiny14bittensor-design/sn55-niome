@@ -1,12 +1,12 @@
-"""Keep a live S3 PUT open until NIOME publishes the task's real seeds.
+"""Forensically observe NIOME seed publication; live overwrite is opt-in.
 
 The validator's ordinary miner process remains the reliability path: it writes a
-baseline object promptly.  This sidecar opens several PUT profiles while the
-presigned URL is valid and streams JSON whitespace to keep them alive.  It
-polls the original signed contract object until the backend replaces the
-placeholder seed with the validator's random seed set.  S3 object replacement
-is atomic, so failed or cancelled bridges leave the already completed baseline
-object in place.
+baseline object promptly.  Public-round audits on 2026-09-27 found no
+authoritative seed signal before official scoring: the signed contract stayed
+at seed 0, public task history exposed the seed only after scoring, and the
+published block-hash algorithm did not reproduce the live scores.  Therefore
+the sidecar does not open a PUT by default.  The former same-round overwrite
+experiment remains available only behind an explicit research opt-in.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
@@ -56,6 +57,7 @@ from niome_subnet.utils.settings import (
     CHR11_PATH,
     MINER_SCORE_URL,
     SEED_BLOCK,
+    TASK_URL,
     TASK_HISTORY_URL,
     VALIDATION_BLOCK,
 )
@@ -70,6 +72,19 @@ EXPLORATION_PROFILE = os.getenv("NIOME_EXPLORATION_PROFILE", "").strip() or None
 OBSERVE_ONLY = os.getenv(
     "NIOME_BRIDGE_OBSERVE_ONLY", ""
 ).strip().lower() in {"1", "true", "yes"}
+SAME_ROUND_OVERWRITE_ENABLED = os.getenv(
+    "NIOME_ENABLE_UNVERIFIED_SAME_ROUND_OVERWRITE", "false"
+).strip().lower() in {"1", "true", "yes"}
+AUTHORIZED_VALIDATOR_WALLET_NAME = os.getenv(
+    "NIOME_SEED_VALIDATOR_WALLET_NAME", ""
+).strip()
+AUTHORIZED_VALIDATOR_WALLET_HOTKEY = os.getenv(
+    "NIOME_SEED_VALIDATOR_WALLET_HOTKEY", ""
+).strip()
+AUTHORIZED_VALIDATOR_WALLET_PATH = os.getenv(
+    "NIOME_SEED_VALIDATOR_WALLET_PATH", ""
+).strip()
+AUTHORIZED_VALIDATOR_NETUID = 55
 CONSISTENCY_CONTROL_ENABLED = os.getenv(
     "NIOME_CONSISTENCY_CONTROL", "true"
 ).strip().lower() not in {"0", "false", "no"}
@@ -99,6 +114,10 @@ STANDBY_OPEN_TARGET_REMAINING_SECONDS = 30.0
 STANDBY_MAX_START_DELAY_SECONDS = 60.0
 ARTIFACT_WAIT_SECONDS = 90.0
 PADDING_CHUNK_BYTES = 1024 * 1024
+COMPLETION_INTERVAL_SECONDS = 1.0
+EXPECTED_SECONDS_PER_BLOCK = 12.0
+PLANNED_BUILD_RESERVE_SECONDS = 180.0
+PLANNED_COMPLETION_RESERVE_BYTES = 64 * 1024 * 1024
 ACTIVE_BRIDGE_STATES = {
     "created",
     "opening",
@@ -111,6 +130,8 @@ ACTIVE_BRIDGE_STATES = {
     "observation_build_complete",
     "finishing_upload",
 }
+
+_AUTHORIZED_VALIDATOR_WALLET: Any | None = None
 
 
 def _round_coordinates(block: int) -> tuple[int, list[int], int, int]:
@@ -558,6 +579,87 @@ def _envelope_seconds_remaining(envelope_path: Path) -> float:
     return deadline - time.monotonic()
 
 
+def _authorized_validator_seed_source_configured() -> bool:
+    """Return whether an explicitly configured, locally owned validator is usable."""
+    values = (
+        AUTHORIZED_VALIDATOR_WALLET_NAME,
+        AUTHORIZED_VALIDATOR_WALLET_HOTKEY,
+        AUTHORIZED_VALIDATOR_WALLET_PATH,
+    )
+    return all(values)
+
+
+def _get_authorized_validator_wallet():
+    """Load only the wallet explicitly selected for the authorized API route."""
+    global _AUTHORIZED_VALIDATOR_WALLET
+    if not _authorized_validator_seed_source_configured():
+        raise RuntimeError("authorized validator seed source is not configured")
+    if _AUTHORIZED_VALIDATOR_WALLET is None:
+        _AUTHORIZED_VALIDATOR_WALLET = bt.Wallet(
+            name=AUTHORIZED_VALIDATOR_WALLET_NAME,
+            hotkey=AUTHORIZED_VALIDATOR_WALLET_HOTKEY,
+            path=AUTHORIZED_VALIDATOR_WALLET_PATH,
+        )
+    return _AUTHORIZED_VALIDATOR_WALLET
+
+
+def _fetch_authorized_validator_contract(task_dir: Path) -> dict[str, Any]:
+    """Read the current task using a locally owned validator's normal signature.
+
+    This deliberately supports only an explicitly configured local wallet.  It
+    neither accepts bearer/API credentials nor consumes values found in logs.
+    The backend still makes the final authorization decision based on the
+    signing hotkey's live validator stake.
+    """
+    wallet = _get_authorized_validator_wallet()
+    timestamp = str(time.time())
+    hotkey = wallet.hotkey.ss58_address
+    netuid = str(AUTHORIZED_VALIDATOR_NETUID)
+    canonical = json.dumps(
+        {
+            "payload": json.dumps({}, separators=(",", ":"), sort_keys=True),
+            "hotkey": hotkey,
+            "netuid": netuid,
+            "timestamp": timestamp,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    signature = wallet.hotkey.sign(canonical.encode()).hex()
+    request = Request(
+        TASK_URL,
+        headers={
+            "Accept": "application/json",
+            "X-Signature": signature,
+            "X-Hotkey": hotkey,
+            "X-Netuid": netuid,
+            "X-Timestamp": timestamp,
+        },
+    )
+    with urlopen(request, timeout=CONTRACT_HTTP_TIMEOUT_SECONDS) as response:
+        task = json.loads(response.read())
+    if not isinstance(task, dict):
+        raise ValueError("authorized current-task response is not an object")
+    response_task_id = task.get("task_id", task.get("id"))
+    if response_task_id != task_dir.name:
+        raise ValueError(
+            "authorized current-task UUID does not match the active bridge task"
+        )
+    contract_url = task.get("contract_url")
+    if not isinstance(contract_url, str) or not contract_url:
+        raise ValueError("authorized current-task response has no contract URL")
+    contract_request = Request(contract_url, headers={"Accept": "application/json"})
+    with urlopen(
+        contract_request, timeout=CONTRACT_HTTP_TIMEOUT_SECONDS
+    ) as response:
+        contract = json.loads(response.read())
+    if not isinstance(contract, dict):
+        raise ValueError("authorized validator contract is not an object")
+    original = json.loads((task_dir / "contract.json").read_text(encoding="utf-8"))
+    _assert_contract_seed_only_changed(original, contract)
+    return contract
+
+
 def _fetch_refreshed_contract(task_dir: Path) -> dict[str, Any]:
     """Re-read the task's signed contract object without logging its URL.
 
@@ -661,6 +763,41 @@ def _standby_start_delay(url_seconds_remaining: float) -> float:
     )
 
 
+def _planned_stream_total_bytes(
+    *,
+    current_block: int,
+    validation_block: int,
+    stream_bytes: int,
+    maximum_total_bytes: int,
+) -> int:
+    """Reserve enough body for validation/build without a huge final flush.
+
+    A fixed 576 MiB body leaves hundreds of MiB to flush when a task arrives
+    late.  S3 rejected those bursts with SlowDown.  Size each body from the
+    actual round position, retain three minutes for submission construction,
+    and leave a paced 64 MiB completion tail.
+    """
+    seconds_to_validation = max(
+        0.0,
+        (validation_block - current_block) * EXPECTED_SECONDS_PER_BLOCK,
+    )
+    planned = (
+        int(
+            stream_bytes
+            * (seconds_to_validation + PLANNED_BUILD_RESERVE_SECONDS)
+        )
+        + PLANNED_COMPLETION_RESERVE_BYTES
+    )
+    # Align the signed Content-Length to completion chunks, while retaining
+    # room for the opening byte and a realistic JSON payload.
+    minimum = PLANNED_COMPLETION_RESERVE_BYTES + PADDING_CHUNK_BYTES
+    planned = max(minimum, planned)
+    aligned = (
+        (planned + PADDING_CHUNK_BYTES - 1) // PADDING_CHUNK_BYTES
+    ) * PADDING_CHUNK_BYTES
+    return min(maximum_total_bytes, aligned)
+
+
 def _wait_for_authoritative_contract_seed(
     *,
     task_dir: Path,
@@ -669,8 +806,10 @@ def _wait_for_authoritative_contract_seed(
     state: dict[str, Any],
     status_path: Path,
     events_path: Path,
+    subtensor: Any | None = None,
+    validation_block: int | None = None,
 ) -> tuple[ArtifactBundle, Any]:
-    """Poll signed contract, then verified task history after URL expiry."""
+    """Poll owned-validator, signed-contract, then verified-history sources."""
     task = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
     contract_url_deadline, contract_deadline_source = _presigned_url_deadline(
         str(task["contract_url"])
@@ -693,6 +832,10 @@ def _wait_for_authoritative_contract_seed(
     history_confirmations = 0
     history_attempts = 0
     history_fallback_started = False
+    validator_source_enabled = _authorized_validator_seed_source_configured()
+    validator_source_attempts = 0
+    validator_source_error: str | None = None
+    state["authorized_validator_seed_source_configured"] = validator_source_enabled
     while True:
         live_labels = tuple(
             bridge.label for bridge in bridges if not bridge.done.is_set()
@@ -704,8 +847,39 @@ def _wait_for_authoritative_contract_seed(
             )
         attempt += 1
         signed_contract_expired = time.monotonic() >= contract_url_deadline
+        source = (
+            "task-history-expiry-fallback"
+            if signed_contract_expired
+            else "signed-contract"
+        )
         try:
-            if signed_contract_expired:
+            validator_window_open = (
+                validator_source_enabled
+                and subtensor is not None
+                and validation_block is not None
+                and int(subtensor.block) >= validation_block
+            )
+            if validator_window_open:
+                validator_source_attempts += 1
+                source = "authorized-validator-current-task"
+                try:
+                    refreshed = _fetch_authorized_validator_contract(task_dir)
+                    validator_source_error = None
+                except HTTPError as error:
+                    validator_source_error = f"HTTPError {error.code}"
+                    if error.code in {401, 403}:
+                        validator_source_enabled = False
+                        _append_event(
+                            events_path,
+                            "authorized_validator_seed_source_rejected",
+                            status=error.code,
+                            reason=(
+                                "backend rejected the configured wallet; source "
+                                "disabled for this task"
+                            ),
+                        )
+                    raise
+            elif signed_contract_expired:
                 if not history_fallback_started:
                     history_fallback_started = True
                     state["contract_seed_source"] = "task-history-expiry-fallback"
@@ -733,7 +907,7 @@ def _wait_for_authoritative_contract_seed(
             last_error = None
             if seed_plan.mode == "contract-authoritative":
                 confirmed = True
-                if signed_contract_expired:
+                if source == "task-history-expiry-fallback":
                     observed = tuple(seed_plan.optimization_seeds)
                     if observed == history_candidate:
                         history_confirmations += 1
@@ -747,18 +921,23 @@ def _wait_for_authoritative_contract_seed(
                         >= TASK_HISTORY_REQUIRED_CONFIRMATIONS
                     )
                 if confirmed:
-                    source = (
-                        "task-history-expiry-fallback"
-                        if signed_contract_expired
-                        else "signed-contract"
-                    )
-                    if signed_contract_expired:
+                    if source == "task-history-expiry-fallback":
                         seed_plan = replace(
                             seed_plan,
                             source=source,
                             reason=(
                                 "non-placeholder seed recovered from verified task "
                                 "history after the signed contract URL expired"
+                            ),
+                        )
+                    elif source == "authorized-validator-current-task":
+                        seed_plan = replace(
+                            seed_plan,
+                            source=source,
+                            reason=(
+                                "non-placeholder seed read through the normal "
+                                "current-task API signed by the configured local "
+                                "validator wallet"
                             ),
                         )
                     refreshed_artifacts = replace(artifacts, contract=refreshed)
@@ -776,6 +955,15 @@ def _wait_for_authoritative_contract_seed(
                         seed_policy=seed_plan.as_dict(),
                     )
                     state["contract_seed_source"] = source
+                    state["authorized_validator_seed_source_enabled"] = (
+                        validator_source_enabled
+                    )
+                    state["authorized_validator_seed_source_attempts"] = (
+                        validator_source_attempts
+                    )
+                    state["authorized_validator_seed_source_error"] = (
+                        validator_source_error
+                    )
                     return refreshed_artifacts, seed_plan
             elif signed_contract_expired:
                 # A placeholder between candidate reads breaks the consecutive
@@ -791,6 +979,9 @@ def _wait_for_authoritative_contract_seed(
                 "contract_poll_attempts": attempt,
                 "task_history_poll_attempts": history_attempts,
                 "task_history_seed_confirmations": history_confirmations,
+                "authorized_validator_seed_source_enabled": validator_source_enabled,
+                "authorized_validator_seed_source_attempts": validator_source_attempts,
+                "authorized_validator_seed_source_error": validator_source_error,
                 "last_contract_seed_raw": last_seed_raw,
                 "last_contract_poll_error": last_error,
                 "stream_results": snapshots,
@@ -819,12 +1010,14 @@ class SlowPut:
         total_bytes: int,
         stream_bytes: int,
         stream_interval_seconds: float = STREAM_INTERVAL_SECONDS,
+        completion_interval_seconds: float = COMPLETION_INTERVAL_SECONDS,
         label: str = "stream",
     ):
         self.url = url
         self.total_bytes = total_bytes
         self.stream_bytes = stream_bytes
         self.stream_interval_seconds = stream_interval_seconds
+        self.completion_interval_seconds = completion_interval_seconds
         self.label = label
         self.payload_ready = threading.Event()
         self.done = threading.Event()
@@ -836,6 +1029,7 @@ class SlowPut:
             "total_bytes": total_bytes,
             "stream_bytes": stream_bytes,
             "stream_interval_seconds": stream_interval_seconds,
+            "completion_interval_seconds": completion_interval_seconds,
             "bytes_sent": 0,
             "send_count": 0,
         }
@@ -937,7 +1131,17 @@ class SlowPut:
                 raise RuntimeError(
                     f"payload exceeds reserved body: {sent + len(tail)} > {self.total_bytes}"
                 )
-            self._record(state="completing", completion_started_at=_utc_now())
+            completion_started_monotonic = time.monotonic()
+            self._record(
+                state="completing",
+                completion_started_at=_utc_now(),
+                completion_bytes_initial=max(0, self.total_bytes - sent),
+                completion_target_bytes_per_second=(
+                    PADDING_CHUNK_BYTES / self.completion_interval_seconds
+                    if self.completion_interval_seconds > 0
+                    else None
+                ),
+            )
             connection.send(tail)
             sent += len(tail)
             send_count += 1
@@ -947,7 +1151,15 @@ class SlowPut:
                 connection.send(b" " * chunk_size)
                 sent += chunk_size
                 send_count += 1
-                self._record(bytes_sent=sent, send_count=send_count)
+                self._record(
+                    bytes_sent=sent,
+                    send_count=send_count,
+                    completion_elapsed_seconds=(
+                        time.monotonic() - completion_started_monotonic
+                    ),
+                )
+                if sent < self.total_bytes and self.completion_interval_seconds > 0:
+                    time.sleep(self.completion_interval_seconds)
             response = connection.getresponse()
             response_body = response.read(4096)
             response_headers = {
@@ -1087,6 +1299,32 @@ def _handle_envelope(envelope_path: Path) -> None:
     }
     _write_json(bridge_status_path, state)
     _append_event(bridge_events_path, "handler_started", **state)
+    if not SAME_ROUND_OVERWRITE_ENABLED:
+        state.update(
+            {
+                "state": "disabled_same_round_overwrite",
+                "completed_at": _utc_now(),
+                "bridge_mode": "disabled-no-pre-score-authoritative-seed",
+                "same_round_overwrite_enabled": False,
+                "submission_attempted": False,
+                "active_put_count": 0,
+                "reason": (
+                    "public signed-contract, task-history, chain, and validator-code "
+                    "audit found no authoritative seed available before official scoring"
+                ),
+            }
+        )
+        _write_json(bridge_status_path, state)
+        _append_event(
+            bridge_events_path,
+            "same_round_overwrite_disabled",
+            reason=state["reason"],
+        )
+        logger.info(
+            "Same-round overwrite disabled for task %s; ordinary robust submission remains authoritative",
+            task_dir.name,
+        )
+        return
     try:
         envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
         presigned_url = str(envelope["presigned_url"])
@@ -1097,11 +1335,32 @@ def _handle_envelope(envelope_path: Path) -> None:
                 f"only {remaining:.3f}s remained before the presigned URL expired"
             )
 
+        # Resolve round position before committing Content-Length.  Recheck
+        # the URL afterwards because chain RPC time consumes the opening
+        # window and a signed URL cannot start a new request after expiry.
+        subtensor = bt.Subtensor(network="finney")
+        current_block = int(subtensor.block)
+        round_start, _, _, validation_block = _round_coordinates(current_block)
+        remaining = url_deadline - time.monotonic()
+        if remaining < OPEN_MINIMUM_REMAINING_SECONDS:
+            raise RuntimeError(
+                "chain timing lookup left only "
+                f"{remaining:.3f}s before the presigned URL expired"
+            )
+
         standby_delay = _standby_start_delay(remaining)
         put_opened_at = _utc_now()
-        for index, (label, stream_bytes, total_bytes) in enumerate(STREAM_PROFILES):
+        for index, (label, stream_bytes, maximum_total_bytes) in enumerate(
+            STREAM_PROFILES
+        ):
             if index:
                 time.sleep(standby_delay)
+            total_bytes = _planned_stream_total_bytes(
+                current_block=current_block,
+                validation_block=validation_block,
+                stream_bytes=stream_bytes,
+                maximum_total_bytes=maximum_total_bytes,
+            )
             bridge = SlowPut(
                 presigned_url,
                 total_bytes=total_bytes,
@@ -1130,6 +1389,14 @@ def _handle_envelope(envelope_path: Path) -> None:
                         "bytes_per_second": bridge.stream_bytes
                         / bridge.stream_interval_seconds,
                         "fixed_upload_bytes": bridge.total_bytes,
+                        "maximum_upload_bytes": next(
+                            profile[2]
+                            for profile in STREAM_PROFILES
+                            if profile[0] == bridge.label
+                        ),
+                        "completion_bytes_per_second": (
+                            PADDING_CHUNK_BYTES / COMPLETION_INTERVAL_SECONDS
+                        ),
                         "role": (
                             "primary" if bridge.label.endswith("primary") else "standby"
                         ),
@@ -1169,9 +1436,6 @@ def _handle_envelope(envelope_path: Path) -> None:
             "consistency_policy_resolved",
             consistency_control=consistency_control,
         )
-        subtensor = bt.Subtensor(network="finney")
-        current_block = int(subtensor.block)
-        round_start, _, _, validation_block = _round_coordinates(current_block)
         state.update(
             {
                 "state": "waiting_for_contract_seed",
@@ -1200,6 +1464,8 @@ def _handle_envelope(envelope_path: Path) -> None:
                 task_dir=task_dir,
                 artifacts=artifacts,
                 bridges=bridges,
+                subtensor=subtensor,
+                validation_block=validation_block,
                 state=state,
                 status_path=bridge_status_path,
                 events_path=bridge_events_path,
@@ -1382,13 +1648,26 @@ def _handle_envelope(envelope_path: Path) -> None:
         for candidate in bridges:
             if candidate.done.is_set():
                 continue
+            before_completion = candidate.snapshot()
+            completion_bytes = max(
+                0,
+                int(before_completion.get("total_bytes", 0))
+                - int(before_completion.get("bytes_sent", 0)),
+            )
+            completion_wait_seconds = max(
+                180.0,
+                completion_bytes
+                / (PADDING_CHUNK_BYTES / COMPLETION_INTERVAL_SECONDS)
+                + 60.0,
+            )
             _append_event(
                 bridge_events_path,
                 "upload_completion_started",
-                stream=candidate.snapshot(),
+                completion_wait_seconds=completion_wait_seconds,
+                stream=before_completion,
             )
             candidate.finish_with(submission_raw)
-            if not candidate.done.wait(180):
+            if not candidate.done.wait(completion_wait_seconds):
                 candidate.cancel()
                 _append_event(
                     bridge_events_path,
@@ -1547,7 +1826,15 @@ def run() -> None:
         ARTIFACT_ROOT.resolve(),
         GUIDE_VARIANTS_PER_TARGET,
         PRIMARY_CAS_SHARE,
-        "observe-contract-seeds" if OBSERVE_ONLY else "submit-contract-seeds",
+        (
+            "disabled-no-pre-score-authoritative-seed"
+            if not SAME_ROUND_OVERWRITE_ENABLED
+            else (
+                "observe-contract-seeds"
+                if OBSERVE_ONLY
+                else "submit-contract-seeds"
+            )
+        ),
         FAST_SEED_FOCUSED_VARIANTS_PER_ANCHOR,
         FAST_SEED_OPTIMIZER_TIME_BUDGET_SECONDS,
         "common+residual" if EXPLORATION_PROFILE else "common-champion",

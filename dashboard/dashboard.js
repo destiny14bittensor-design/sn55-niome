@@ -20,6 +20,29 @@ let selectedMiner = localStorage.getItem("niome-selected-miner") || "bitcoin-hyp
 let lastNoticeKey = localStorage.getItem("niome-fleet-last-notice") || "";
 let eventStreamLive = false;
 
+const researchPhaseLabels = {
+  waiting_for_automation: "자동화기 대기",
+  fingerprint_build: "Fingerprint 생성",
+  probe_score_wait: "공식 점수 감시",
+  dataset_discovery: "Discovery 수집",
+  historical_holdout: "Holdout 구성",
+  generator_search: "생성기 가설 탐색",
+  shadow_prediction: "사전 Shadow 검증",
+  eligible_for_review: "운영 검토 가능",
+};
+
+const trackStatusLabels = {
+  waiting: "대기",
+  collecting: "증거 수집",
+  active: "실행 중",
+  searching: "가설 탐색",
+  validating: "검증 중",
+  blocked: "관문 미통과",
+  inconclusive: "증거 부족",
+  complete: "목표 검증",
+  eligible: "검토 가능",
+};
+
 function text(id, value) {
   const el = byId(id);
   if (el) el.textContent = value ?? "—";
@@ -70,6 +93,221 @@ function fmtBytes(value) {
 function shortTask(taskId) {
   if (!taskId) return "작업 대기";
   return taskId.length > 18 ? `${taskId.slice(0, 10)}…${taskId.slice(-6)}` : taskId;
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
+function trackText(value, fallback) {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return fallback;
+}
+
+function normalizeGates(rawGates, fallbackGates) {
+  if (Array.isArray(rawGates)) {
+    return rawGates.map((gate, index) => typeof gate === "object" ? {
+      label: trackText(firstDefined(gate.label, gate.title, gate.name), `관문 ${index + 1}`),
+      detail: trackText(firstDefined(gate.detail, gate.value, gate.summary), ""),
+      complete: gate.complete === true || gate.passed === true || gate.status === "complete" || gate.status === "passed",
+      active: gate.active === true || gate.status === "active" || gate.status === "running",
+    } : { label: String(gate), detail: "", complete: false, active: false });
+  }
+  if (rawGates && typeof rawGates === "object") {
+    return Object.entries(rawGates).map(([name, gate]) => typeof gate === "object" ? {
+      label: trackText(firstDefined(gate.label, gate.title), name.replaceAll("_", " ")),
+      detail: trackText(firstDefined(gate.detail, gate.value, gate.summary), ""),
+      complete: gate.complete === true || gate.passed === true || gate.status === "complete" || gate.status === "passed",
+      active: gate.active === true || gate.status === "active" || gate.status === "running",
+    } : { label: name.replaceAll("_", " "), detail: "", complete: gate === true, active: false });
+  }
+  return fallbackGates;
+}
+
+function renderTrackStatus(prefix, status, label) {
+  const el = byId(`${prefix}-status`);
+  if (!el) return;
+  const normalized = String(status || "waiting").toLowerCase();
+  const style = ["complete", "eligible", "passed"].includes(normalized)
+    ? "complete"
+    : ["blocked", "inconclusive", "failed"].includes(normalized) ? "blocked" : normalized === "waiting" ? "waiting" : "active";
+  el.className = `track-status ${style}`;
+  el.textContent = label || trackStatusLabels[normalized] || researchPhaseLabels[normalized] || String(status || "대기");
+}
+
+function renderTrackGates(id, gates) {
+  const container = byId(id);
+  if (!container) return;
+  container.replaceChildren();
+  gates.forEach((gate, index) => {
+    const item = document.createElement("div");
+    item.className = `track-gate ${gate.complete ? "complete" : gate.active ? "active" : "waiting"}`;
+    const mark = document.createElement("span");
+    mark.className = "track-gate-mark";
+    mark.textContent = gate.complete ? "✓" : String(index + 1);
+    const label = document.createElement("strong");
+    label.textContent = gate.label;
+    const detail = document.createElement("small");
+    detail.textContent = gate.detail || (gate.complete ? "통과" : gate.active ? "진행 중" : "대기");
+    item.append(mark, label, detail);
+    container.append(item);
+  });
+}
+
+function normalizeGeneratorTrack(state) {
+  const raw = state.tracks?.generator || {};
+  const dataset = state.dataset || {};
+  const probe = state.probe || {};
+  const hypothesis = state.hypothesis || {};
+  const forward = state.forward || {};
+  const targets = state.targets || {};
+  const discoveryTarget = targets.discovery || 20;
+  const holdoutTarget = targets.holdout || 5;
+  const forwardTarget = targets.forward_exact || forward.target || 5;
+  const fallbackAction = hypothesis.accepted_model ? {
+    title: "승인 가설의 사전 Shadow 검증",
+    detail: "점수 공개 전에 예측값과 기록 시각을 고정하고 exact 여부를 검증합니다.",
+  } : {
+    title: "기각된 직접 변환군 밖의 생성기 탐색",
+    detail: `${fmtNumber(hypothesis.tested_models || 0, 0)}개 기존 가설은 회귀 기준으로 보존하고 새 생성기 계열을 검증합니다.`,
+  };
+  const action = raw.current_action || raw.action || fallbackAction;
+  const fallbackGates = [
+    { label: "Discovery 라벨", detail: `${dataset.discovery_tasks || 0} / ${discoveryTarget}`, complete: (dataset.discovery_tasks || 0) >= discoveryTarget },
+    { label: "독립 Holdout", detail: `${dataset.holdout_tasks || 0} / ${holdoutTarget}`, complete: (dataset.holdout_tasks || 0) >= holdoutTarget },
+    { label: "가설 exact 통과", detail: hypothesis.accepted_model || "승인 모델 없음", complete: Boolean(hypothesis.accepted_model), active: !hypothesis.accepted_model },
+    { label: "공개 전 예측 기록", detail: `${forward.recorded_predictions || 0}회`, complete: (forward.recorded_predictions || 0) > 0 },
+    { label: "사전 exact 재현", detail: `${forward.consecutive_exact || 0} / ${forwardTarget}`, complete: (forward.consecutive_exact || 0) >= forwardTarget },
+  ];
+  const fallbackStatus = forward.eligible ? "complete" : hypothesis.accepted_model ? "validating" : "searching";
+  return {
+    status: firstDefined(raw.status, raw.phase, fallbackStatus),
+    statusLabel: trackText(firstDefined(raw.status_label, raw.label), null),
+    action: {
+      title: trackText(firstDefined(action.title, raw.title), fallbackAction.title),
+      detail: trackText(firstDefined(action.detail, action.summary, raw.detail), fallbackAction.detail),
+      taskId: firstDefined(action.task_id, raw.task_id),
+    },
+    labels: trackText(firstDefined(raw.metrics?.labels, raw.evidence?.label_count), `${dataset.latest_epoch_seed_values || 0}`),
+    labelsMeta: trackText(firstDefined(raw.metrics?.labels_detail, raw.evidence?.labels_detail), `${dataset.latest_epoch_tasks || 0} task 안정 epoch`),
+    models: trackText(firstDefined(raw.metrics?.tested_models, raw.evidence?.tested_models), fmtNumber(hypothesis.tested_models || 0, 0)),
+    modelsMeta: trackText(firstDefined(raw.metrics?.model_status, raw.evidence?.model_status), hypothesis.accepted_model ? `승인 ${hypothesis.accepted_model}` : "승인 후보 없음"),
+    forward: trackText(firstDefined(raw.metrics?.forward_exact, raw.evidence?.forward_exact), `${forward.consecutive_exact || 0} / ${forwardTarget}`),
+    forwardMeta: trackText(firstDefined(raw.metrics?.forward_detail, raw.evidence?.forward_detail), "공개 전 기록만 인정"),
+    evidence: trackText(firstDefined(raw.evidence_summary, raw.evidence?.summary, raw.summary), `Probe ${probe.exact_tasks || 0}회 exact은 점수 공개 후 역산 검증이며 사전예측 성공에는 포함하지 않습니다.`),
+    gates: normalizeGates(raw.gates, fallbackGates),
+    safety: trackText(firstDefined(raw.safety?.label, raw.authorization?.label, raw.safety_label), state.safety?.submission_writes === false ? "SHADOW · 제출 쓰기 없음" : "안전 설정 확인 필요"),
+    safetyWarning: state.safety?.submission_writes !== false && !raw.safety?.authorized,
+  };
+}
+
+function normalizeEarlyScoreTrack(state) {
+  const raw = state.tracks?.early_score || {};
+  const probe = state.probe || {};
+  const evidence = raw.evidence || {};
+  const metrics = raw.metrics || {};
+  const hits = Number(firstDefined(metrics.actionable_individual_scores, metrics.early_individual_hits, evidence.early_individual_hits, raw.early_individual_hits, 0));
+  const batchCount = Number(firstDefined(metrics.batch_observations, evidence.batch_observations, raw.batch_observations, probe.captured_tasks, 0));
+  const leadSeconds = firstDefined(metrics.lead_time_seconds, evidence.lead_time_seconds, raw.lead_time_seconds);
+  const action = raw.current_action || raw.action || {};
+  const fallbackGates = [
+    { label: "일괄 공개 기준선", detail: `${batchCount} task 시간축 확보`, complete: batchCount > 0 },
+    { label: "개별 점수 신호 포착", detail: `${hits}회`, complete: hits > 0, active: hits === 0 },
+    { label: "batch 이전성 입증", detail: "서버 시각으로 선후 검증", complete: raw.precedes_batch === true || metrics.precedes_batch === true },
+    { label: "실행 가능 시간창", detail: "결과 생성·PUT 여유 검증", complete: raw.actionable_window_verified === true || metrics.actionable_window_verified === true },
+    { label: "독립 라운드 재현", detail: trackText(firstDefined(metrics.reproduced_rounds, raw.reproduced_rounds), "0회"), complete: raw.reproducible === true || metrics.reproducible === true },
+  ];
+  return {
+    status: firstDefined(raw.status, raw.phase, hits > 0 ? "validating" : "searching"),
+    statusLabel: trackText(firstDefined(raw.status_label, raw.label), null),
+    action: {
+      title: trackText(firstDefined(action.title, raw.title), "허가된 조기 점수 관측면 탐색"),
+      detail: trackText(firstDefined(action.detail, action.summary, raw.detail), "개별 결과가 batch 게시보다 앞서는지 동일 시계 기준으로 계측합니다."),
+      taskId: firstDefined(action.task_id, raw.task_id),
+    },
+    hits: trackText(firstDefined(metrics.actionable_individual_scores, metrics.early_individual_hits, evidence.early_individual_hits), `${hits}`),
+    hitsMeta: trackText(firstDefined(metrics.hits_detail, evidence.hits_detail), "batch보다 앞선 결과만 인정"),
+    lead: leadSeconds === undefined ? "—" : fmtDuration(leadSeconds),
+    leadMeta: trackText(firstDefined(metrics.lead_detail, evidence.lead_detail), leadSeconds === undefined ? "입증된 시간창 없음" : "batch 게시 대비"),
+    batch: trackText(firstDefined(metrics.batch_observations, evidence.batch_observations), `${batchCount}`),
+    batchMeta: trackText(firstDefined(metrics.batch_detail, evidence.batch_detail), "관측됐지만 조기 신호 아님"),
+    evidence: trackText(firstDefined(raw.evidence_summary, evidence.summary, raw.summary), hits > 0 ? "조기 후보 신호가 포착됐으며 batch 이전성과 사용 가능한 시간창을 추가 검증합니다." : "현재 확보한 점수는 batch 공개 후 신호입니다. 실행 가능한 조기 개별 점수 증거는 아직 없습니다."),
+    gates: normalizeGates(raw.gates, fallbackGates),
+    safety: trackText(firstDefined(raw.safety?.label, raw.authorization?.label, raw.safety_label), "READ ONLY · 허가된 경로만 관측"),
+    safetyWarning: raw.safety?.authorized === false || raw.authorization?.authorized === false,
+  };
+}
+
+function renderResearch(state) {
+  if (!state) return;
+  const automation = state.automation || {};
+  const targets = state.targets || {};
+  const probe = state.probe || {};
+  const generator = normalizeGeneratorTrack(state);
+  const earlyScore = normalizeEarlyScoreTrack(state);
+
+  renderTrackStatus("generator", generator.status, generator.statusLabel);
+  text("generator-action-title", generator.action.title);
+  text("generator-action-detail", generator.action.detail);
+  text("generator-action-task", generator.action.taskId ? `task ${shortTask(generator.action.taskId)}` : "task 자동 선택");
+  text("generator-labels", generator.labels);
+  text("generator-labels-meta", generator.labelsMeta);
+  text("generator-models", generator.models);
+  text("generator-models-meta", generator.modelsMeta);
+  text("generator-forward", generator.forward);
+  text("generator-forward-meta", generator.forwardMeta);
+  text("generator-evidence", generator.evidence);
+  text("generator-safety", generator.safety);
+  byId("generator-safety")?.classList.toggle("warning", generator.safetyWarning);
+  renderTrackGates("generator-gates", generator.gates);
+
+  renderTrackStatus("early-score", earlyScore.status, earlyScore.statusLabel);
+  text("early-score-action-title", earlyScore.action.title);
+  text("early-score-action-detail", earlyScore.action.detail);
+  text("early-score-action-task", earlyScore.action.taskId ? `task ${shortTask(earlyScore.action.taskId)}` : "task 자동 선택");
+  text("early-score-hits", earlyScore.hits);
+  text("early-score-hits-meta", earlyScore.hitsMeta);
+  text("early-score-lead", earlyScore.lead);
+  text("early-score-lead-meta", earlyScore.leadMeta);
+  text("early-score-batch", earlyScore.batch);
+  text("early-score-batch-meta", earlyScore.batchMeta);
+  text("early-score-evidence", earlyScore.evidence);
+  text("early-score-safety", earlyScore.safety);
+  byId("early-score-safety")?.classList.toggle("warning", earlyScore.safetyWarning);
+  renderTrackGates("early-score-gates", earlyScore.gates);
+
+  text("research-probe", `${probe.exact_tasks || 0} / ${targets.probe_verification || 5} exact`);
+  text("research-probe-meta", probe.latest?.recovery_latency_seconds === null || probe.latest?.recovery_latency_seconds === undefined ? "점수 공개 후 seed 역산 검증" : `최근 공개 후 ${fmtDuration(probe.latest.recovery_latency_seconds)} · 사전예측 아님`);
+  text("research-health", automation.supervisor_healthy ? "자동화기 ONLINE" : "자동화기 CHECK");
+  text("research-updated", state.generated_at ? `갱신 ${fmtTime(state.generated_at)}` : "갱신 대기");
+
+  const rounds = byId("research-rounds");
+  rounds.replaceChildren();
+  const recent = (state.recent_rounds || []).slice(0, 6);
+  if (!recent.length) {
+    const empty = document.createElement("p"); empty.className = "research-round-empty"; empty.textContent = "공개 seed 라벨을 기다리고 있습니다."; rounds.append(empty);
+  }
+  for (const round of recent) {
+    const row = document.createElement("div"); row.className = "research-round";
+    const task = document.createElement("code"); task.textContent = shortTask(round.task_id);
+    const partition = document.createElement("span"); partition.className = `research-partition ${round.partition || "observed"}`; partition.textContent = String(round.partition || "observed").toUpperCase();
+    const seed = document.createElement("strong"); seed.textContent = round.official_seeds?.length ? `[${round.official_seeds.join(", ")}]` : "seed 대기";
+    const check = document.createElement("small");
+    check.textContent = round.prediction ? (round.prediction.exact === true ? "PREDICT ✓" : round.prediction.exact === false ? "PREDICT ✕" : "PREDICT 대기") : round.probe?.exact_unordered ? "PROBE ✓" : "PUBLIC";
+    row.append(task, partition, seed, check); rounds.append(row);
+  }
+}
+
+async function fetchResearch() {
+  try {
+    const response = await fetch("/api/v1/seed-research/state", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderResearch(await response.json());
+  } catch (_) {
+    renderTrackStatus("generator", "blocked", "상태 연결 재시도");
+    renderTrackStatus("early-score", "blocked", "상태 연결 재시도");
+    text("research-health", "자동화기 OFFLINE");
+  }
 }
 
 function statusLabel(overall) {
@@ -546,6 +784,8 @@ byId("notify-button").addEventListener("click", async () => {
 
 if ("Notification" in window && Notification.permission === "granted") text("notify-button", "브라우저 알림 켜짐");
 fetchState();
+fetchResearch();
 connectEvents();
 setInterval(updateFreshness, 1000);
 setInterval(() => { if (!eventStreamLive) fetchState(); }, 15000);
+setInterval(fetchResearch, 5000);
