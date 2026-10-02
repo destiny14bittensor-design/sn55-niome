@@ -72,6 +72,17 @@ above the research floor. It is therefore the leading next-canary candidate,
 but remains undeployed until the frozen live submission receives an official
 score and additional prospective evidence passes the promotion gate.
 
+A broader frozen-payload audit then evaluated the exact uploaded `tao1`, exact
+uploaded `tao2`, and matching `reservoir003` shadow payload on eight disjoint
+synthetic seed triples (24 seeds total). `reservoir003` beat live `tao2` in all
+8/8 paired ensembles. Its median score was `26.7453` versus `25.7309`, and its
+P25 score was `25.6010` versus `24.5840`; median consistency was `8.4477`
+versus `8.1142`. It also beat `tao1` in 7/8 ensembles. The result strengthens
+the next-canary case, but does not clear the full promotion gate: correlation
+with `tao1` was `0.7807`, slightly above the `0.75` independence ceiling, and
+the absolute score uplift remains far smaller than the observed rank-30 gap.
+The audit used neither the current official seed nor current official score.
+
 Two other shapes were rejected. `champion-hybrid20-cas65-v3` gained
 consistency but lost `4.33%` stress score and `8.54%` weighted score versus the
 live canary. The experimental `champion-caslearn10-cas55-v4` lost `8.19%`
@@ -87,6 +98,19 @@ single frozen control is task-specific, so this option requires `--tasks 1`.
 The report keeps deterministic stress selection separate from published-seed
 replay: a placeholder seed of `0` never receives an official-replay label or
 an estimated public rank.
+
+Re-evaluate already frozen payloads over several paired unknown-seed ensembles
+without rebuilding or uploading them with:
+
+```bash
+.venv/bin/python tools/frozen_payload_stress_audit.py \
+  --task-root artifacts/miners/tao1/TASK_ID \
+  --submission tao1=artifacts/miners/tao1/TASK_ID/submission.json \
+  --submission tao2-live=artifacts/miners/tao2/TASK_ID/submission.json \
+  --submission reservoir003-shadow=PATH_TO_FROZEN_SHADOW.json \
+  --ensembles 8 \
+  --output artifacts/research/top30_frozen_payload_stress.json
+```
 
 Run the public, credential-free audit with:
 
