@@ -47,8 +47,8 @@ ALL_FLEET_LANES = (
         bridge_process=None,
         axon_port=8091,
         profile="baseline",
-        builder_policy="champion-v1",
-        expected_primary_cas_share=0.60,
+        builder_policy="champion-reservoir003-cas65-v3",
+        expected_primary_cas_share=0.65,
     ),
     MinerLaneConfig(
         lane_id="tao2",
@@ -60,8 +60,8 @@ ALL_FLEET_LANES = (
         bridge_process=None,
         axon_port=8092,
         profile="exploration",
-        builder_policy="champion-reservoir003-cas65-v3",
-        expected_primary_cas_share=0.65,
+        builder_policy="champion-reservoir005-v3",
+        expected_primary_cas_share=0.60,
     ),
     MinerLaneConfig(
         lane_id="won1",

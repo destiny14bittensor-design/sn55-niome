@@ -172,6 +172,21 @@ The same tool accepts `--order-variant LABEL=SOURCE:SALT` and
 `--ensemble-offset N`. Use disjoint offsets for design and holdout; never choose
 a salt after inspecting its holdout results.
 
+### Won-to-Tao policy transfer
+
+The local won pair continued to outperform the original Tao control/canary
+pair while preserving valid 250-row submissions. After the current Tao task
+had already completed both uploads, the next-round configuration was aligned
+with the won roles: `tao1` inherits the stable
+`champion-reservoir003-cas65-v3` control and `tao2` inherits the distinct
+`champion-reservoir005-v3` canary. This transfers the complete tested pair,
+not merely the most recent single candidate.
+
+The change is prospective only. It never rebuilds or overwrites a completed
+same-round submission. Dashboard expectations move with the policies: Cas9
+share `0.65` for tao1 and `0.60` for tao2. Subsequent promotion decisions still
+use paired official rounds and the frozen-payload stress audit.
+
 Run the public, credential-free audit with:
 
 ```bash

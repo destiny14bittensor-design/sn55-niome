@@ -25,11 +25,12 @@ def test_seed_research_state_reads_worker_snapshot(tmp_path, monkeypatch) -> Non
     assert server.load_seed_research_state()["phase"] == "generator_search"
 
 
-def test_tao2_is_the_only_rotating_top30_canary() -> None:
+def test_tao_pair_inherits_the_won_control_and_canary_policies() -> None:
     lanes = {lane.lane_id: lane for lane in server.select_fleet_lanes("tao1,tao2")}
 
-    assert lanes["tao1"].builder_policy == "champion-v1"
+    assert lanes["tao1"].builder_policy == "champion-reservoir003-cas65-v3"
+    assert lanes["tao1"].expected_primary_cas_share == 0.65
     assert lanes["tao1"].profile == "baseline"
-    assert lanes["tao2"].builder_policy == "champion-reservoir003-cas65-v3"
-    assert lanes["tao2"].expected_primary_cas_share == 0.65
+    assert lanes["tao2"].builder_policy == "champion-reservoir005-v3"
+    assert lanes["tao2"].expected_primary_cas_share == 0.60
     assert lanes["tao2"].profile == "exploration"
