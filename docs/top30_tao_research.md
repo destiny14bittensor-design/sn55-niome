@@ -52,6 +52,38 @@ weighted-score percentile floor, and rank candidates by consistency upside
 subject to that floor. No such candidate replaces the live `tao2` policy until
 the current reservoir canary has an official prospective result.
 
+## Current prospective shadow comparison
+
+Task `65ec3d6d-d009-41f4-a1bf-28611054b479` provides the first paired
+pre-seed observation against the actual `tao1` control payload. These are
+stress-seed estimates made before the official task seeds and scores are
+published; they are selection evidence, not official performance claims.
+
+| Policy | Status | Jaccard vs tao1 | Stress score | Weighted score | Consistency | Fidelity |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `champion-reservoir001-cas55-v3` | live tao2 | `0.639344` | `26.403988` | `350.7571` | `8.32642` | `0.904075` |
+| `champion-reservoir003-cas65-v3` | leading shadow | `0.453488` | `26.473582` | `351.2410` | `8.36185` | `0.901374` |
+| `champion-reservoir005-v3` | diversity-only shadow | `0.488095` | `25.482430` | `350.9350` | `8.02211` | `0.905160` |
+
+The `reservoir003` shadow dominates the live canary on this task's stress
+score (`+0.2636%`), weighted score (`+0.1380%`), and consistency (`+0.4255%`),
+while reducing control overlap by `0.185856`. Its small fidelity decrease stays
+above the research floor. It is therefore the leading next-canary candidate,
+but remains undeployed until the frozen live submission receives an official
+score and additional prospective evidence passes the promotion gate.
+
+Two other shapes were rejected. `champion-hybrid20-cas65-v3` gained
+consistency but lost `4.33%` stress score and `8.54%` weighted score versus the
+live canary. The experimental `champion-caslearn10-cas55-v4` lost `8.19%`
+stress score and `3.80%` consistency, so its temporary implementation was
+removed. `reservoir005` is retained only as a low-overlap comparison because
+its stress score and consistency both trail the live canary.
+
+`tools/portfolio_backtest.py --reference-submission PATH` now hashes a frozen
+control payload and applies the existing Jaccard promotion gate between that
+payload and every candidate. This prevents a seemingly diverse set of shadow
+policies from passing while all of them still duplicate the control lane.
+
 Run the public, credential-free audit with:
 
 ```bash

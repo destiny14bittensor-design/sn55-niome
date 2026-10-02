@@ -168,6 +168,23 @@ def _split(index: int, count: int) -> str:
     return "design"
 
 
+def reference_submission(path: Path | None) -> tuple[set[str] | None, str | None]:
+    if path is None:
+        return None, None
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    if not isinstance(value, list):
+        raise ValueError("reference submission must be a JSON list")
+    identifiers = {
+        str(item["experiment_id"])
+        for item in value
+        if isinstance(item, dict) and item.get("experiment_id") is not None
+    }
+    if len(identifiers) != len(value):
+        raise ValueError("reference submission requires unique experiment_id values")
+    return identifiers, sha256_bytes(raw)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks", type=int, default=15)
@@ -184,6 +201,11 @@ def main() -> int:
     )
     parser.add_argument("--chromosome", type=Path, default=ROOT / "data" / "chr11.fa")
     parser.add_argument(
+        "--reference-submission",
+        type=Path,
+        help="optional committed control payload used for Jaccard gates",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=ROOT / "artifacts" / "portfolio" / "backtest.json",
@@ -199,6 +221,12 @@ def main() -> int:
     unknown_policies = sorted(set(policy_order) - set(BUILDER_POLICIES))
     if unknown_policies:
         parser.error(f"unknown policies: {', '.join(unknown_policies)}")
+    try:
+        reference_ids, reference_sha256 = reference_submission(
+            args.reference_submission
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        parser.error(str(error))
 
     session = requests.Session()
     tasks = _items(_get_json(session, TASKS_URL, page=1, per_page=args.tasks))
@@ -260,6 +288,15 @@ def main() -> int:
             ids[policy_id] = result_ids
             score_series[policy_id].append(replay_score)
         overlaps = []
+        if reference_ids is not None:
+            overlaps.extend(
+                {
+                    "left": "reference",
+                    "right": policy_id,
+                    "jaccard": jaccard(reference_ids, ids[policy_id]),
+                }
+                for policy_id in policy_order
+            )
         for left_index, left in enumerate(policy_order):
             for right in policy_order[left_index + 1 :]:
                 overlaps.append(
@@ -320,6 +357,7 @@ def main() -> int:
         "split": "chronological 8 design / 3 selection / 4 final when 15 tasks are supplied",
         "task_count": len(tasks),
         "policies": list(policy_order),
+        "reference_submission_sha256": reference_sha256,
         "gates": gates,
         "promotable": all(gates.values()),
         "correlations": correlations,
