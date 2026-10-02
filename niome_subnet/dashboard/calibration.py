@@ -79,6 +79,38 @@ def _fit_group(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def merge_calibration_records(
+    *record_groups: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge chronological calibration evidence without double counting.
+
+    Later groups replace an older copy of the same submitted payload. This
+    lets a host incrementally add newly published rounds while retaining
+    evidence collected before artifact migration.
+    """
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for group in record_groups:
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                str(item.get("task_id") or ""),
+                str(item.get("submission_sha256") or ""),
+                str(item.get("source") or ""),
+            )
+            if not key[0] or not key[1]:
+                continue
+            merged[key] = dict(item)
+    return sorted(
+        merged.values(),
+        key=lambda item: (
+            str(item.get("received_at") or ""),
+            str(item.get("task_id") or ""),
+            str(item.get("source") or ""),
+        ),
+    )
+
+
 def build_calibration_model(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     clean: list[dict[str, Any]] = []
     for item in records:

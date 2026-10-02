@@ -1,6 +1,7 @@
 from niome_subnet.dashboard.calibration import (
     build_calibration_model,
     calibrated_prediction,
+    merge_calibration_records,
 )
 
 
@@ -48,3 +49,18 @@ def test_insufficient_records_fail_closed():
         "records": 4,
         "minimum_records": 8,
     }
+
+
+def test_incremental_records_replace_duplicate_payload_and_keep_order():
+    old = records(2)
+    old[0]["submission_sha256"] = "sha-0"
+    old[0]["source"] = "won1"
+    old[1]["submission_sha256"] = "sha-1"
+    old[1]["source"] = "won1"
+    replacement = {**old[0], "official_score": 999.0}
+
+    merged = merge_calibration_records(old, [replacement])
+
+    assert len(merged) == 2
+    assert merged[0]["official_score"] == 999.0
+    assert merged[1]["submission_sha256"] == "sha-1"

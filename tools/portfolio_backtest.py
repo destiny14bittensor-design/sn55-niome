@@ -9,6 +9,7 @@ local validator clone.  This prevents hindsight leakage into the backtest.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -215,6 +216,12 @@ def main() -> int:
     parser.add_argument("--tasks", type=int, default=15)
     parser.add_argument("--target-rank", type=int, default=30)
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="parallel policy replays per task; use 2 on the live VPS",
+    )
+    parser.add_argument(
         "--policies",
         default=",".join(DEFAULT_POLICY_ORDER),
         help="comma-separated built-in policies; defaults to the local won1/won2 pair",
@@ -238,6 +245,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.tasks < 1:
         parser.error("--tasks must be positive")
+    if args.workers < 1:
+        parser.error("--workers must be positive")
     policy_order = tuple(
         value.strip() for value in args.policies.split(",") if value.strip()
     )
@@ -289,7 +298,7 @@ def main() -> int:
         )
         policies = {}
         ids = {}
-        for policy_id in policy_order:
+        def run_policy(policy_id: str):
             print(
                 f"building {index + 1}/{len(tasks)} {task_id} {policy_id}",
                 flush=True,
@@ -302,6 +311,11 @@ def main() -> int:
                 cell_types=cell_types,
                 policy_id=policy_id,
             )
+            return policy_id, result, result_ids
+
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            policy_results = list(pool.map(run_policy, policy_order))
+        for policy_id, result, result_ids in policy_results:
             replay_score = result["published_seed_replay_score"]
             result["estimated_public_rank"] = 1 + sum(
                 score > replay_score for score in score_values

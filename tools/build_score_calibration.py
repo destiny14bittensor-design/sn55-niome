@@ -19,7 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from niome_subnet.dashboard.calibration import build_calibration_model
+from niome_subnet.dashboard.calibration import (
+    build_calibration_model,
+    merge_calibration_records,
+)
 
 
 DEFAULT_SCORE_URL = "https://niome-api.genomes.io/api/v3/miners/scores"
@@ -137,15 +140,25 @@ def main() -> int:
     parser.add_argument("--source", action="append", type=parse_source, required=True)
     parser.add_argument("--score-url", default=DEFAULT_SCORE_URL)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--previous-model",
+        type=Path,
+        help="retain deduplicated records from an earlier calibration artifact",
+    )
     parser.add_argument("--workers", type=int, default=12)
     args = parser.parse_args()
     candidates = candidate_rows(args.source)
     paired = attach_official(candidates, args.score_url, args.workers)
-    model = build_calibration_model(paired)
+    previous = load_json(args.previous_model) if args.previous_model else {}
+    previous_records = previous.get("records") or []
+    merged_records = merge_calibration_records(previous_records, paired)
+    model = build_calibration_model(merged_records)
     model["build"] = {
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "candidate_records": len(candidates),
         "paired_records": len(paired),
+        "previous_records": len(previous_records),
+        "merged_records": len(merged_records),
         "sources": [name for name, _, _ in args.source],
     }
     atomic_write(args.output.resolve(), model)

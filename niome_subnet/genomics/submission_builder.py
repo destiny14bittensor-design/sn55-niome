@@ -1042,6 +1042,25 @@ def build_submission(
         if remaining > 0:
             add_ordered(ordered, remaining)
 
+    def add_high_energy(
+        values: list[tuple[float, dict[str, Any]]],
+        limit: int,
+    ) -> None:
+        """Prefer stable high-cut-probability rows inside each fixed quota.
+
+        Mutation, Cas and strand quotas remain unchanged, so this isolates the
+        effect of lower outcome variance from distribution-mix changes. Raw
+        structural score is the deterministic tie-breaker.
+        """
+        ordered = sorted(
+            values,
+            key=lambda item: (
+                -selection_features(item[1])[0],
+                *rank_key(item),
+            ),
+        )
+        add_ordered(ordered, limit)
+
     def select_initial_submission(
         target: float | None,
         *,
@@ -1093,6 +1112,8 @@ def build_submission(
                 )
             elif selection_profile == "ranked-reservoir":
                 add_ranked_reservoir(values, quotas[key])
+            elif selection_profile == "high-energy":
+                add_high_energy(values, quotas[key])
             else:
                 add_ranked(values, quotas[key])
 
