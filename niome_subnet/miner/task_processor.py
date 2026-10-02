@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import multiprocessing as mp
+import os
 from pathlib import Path
 import queue
 import re
@@ -17,6 +18,10 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from niome_subnet.genomics.builder_policy import (
+    BuilderPolicy,
+    DEFAULT_BUILDER_POLICY,
+)
 from niome_subnet.genomics.model import Task
 from niome_subnet.genomics.seed_policy import resolve_seed_plan
 from niome_subnet.genomics.submission_builder import build_submission
@@ -135,17 +140,20 @@ def _upload_with_deadline(
 
 def _candidate_variants(
     baseline: list[dict[str, Any]],
+    policy: BuilderPolicy | None = None,
 ) -> list[tuple[str, list[dict[str, Any]]]]:
     """Create deterministic dataset-level alternatives from the safe baseline."""
+    ratios = (
+        policy.candidate_ratios
+        if policy is not None
+        else (1.0, 0.85, 0.70, 0.50)
+    )
     variants: list[tuple[str, list[dict[str, Any]]]] = [("balanced-full", baseline)]
     if not baseline:
         return variants
 
-    for label, ratio in (
-        ("balanced-85pct", 0.85),
-        ("balanced-70pct", 0.70),
-        ("balanced-50pct", 0.50),
-    ):
+    for ratio in ratios[1:]:
+        label = f"balanced-{int(round(ratio * 100)):02d}pct"
         count = max(1, int(round(len(baseline) * ratio)))
         if count < len(baseline):
             variants.append((label, baseline[:count]))
@@ -158,7 +166,10 @@ def _candidate_variants(
             continue
         seen_guides.add(guide)
         unique_guides.append(experiment)
-    if len(unique_guides) < len(baseline):
+    if (
+        len(unique_guides) < len(baseline)
+        and (policy is None or policy.include_distinct_guides_candidate)
+    ):
         variants.append(("distinct-guides", unique_guides))
 
     deduplicated: list[tuple[str, list[dict[str, Any]]]] = []
@@ -173,6 +184,85 @@ def _candidate_variants(
         seen_payloads.add(digest)
         deduplicated.append((label, candidate))
     return deduplicated[:MAX_SCORING_CANDIDATES]
+
+
+def _select_candidate_index(
+    candidate_scores: list[dict[str, Any]],
+    policy: BuilderPolicy,
+) -> int:
+    """Select a locally scored candidate using the lane's declared objective."""
+
+    successful = [
+        item
+        for item in candidate_scores
+        if "final_score" in item
+        and item.get("index") is not None
+        and math.isfinite(float(item["final_score"]))
+    ]
+    if not successful:
+        return 0
+
+    def per_seed(item: dict[str, Any]) -> list[float]:
+        return [float(value) for value in item.get("per_seed_final_scores") or ()]
+
+    def minimum(item: dict[str, Any]) -> float:
+        values = per_seed(item)
+        return min(values) if values else float("-inf")
+
+    def maximum(item: dict[str, Any]) -> float:
+        values = per_seed(item)
+        return max(values) if values else float("-inf")
+
+    def mean(item: dict[str, Any]) -> float:
+        return float(item["final_score"])
+
+    def fidelity(item: dict[str, Any]) -> float:
+        return float(
+            (item.get("breakdown") or {}).get(
+                "distribution_fidelity_factor", 0.0
+            )
+        )
+
+    if policy.consistency_objective == "maximin":
+        key = lambda item: (
+            minimum(item),
+            mean(item),
+            fidelity(item),
+            int(item.get("rows", 0)),
+            -int(item["index"]),
+        )
+    elif policy.consistency_objective == "fidelity-first":
+        key = lambda item: (
+            fidelity(item),
+            minimum(item),
+            mean(item),
+            int(item.get("rows", 0)),
+            -int(item["index"]),
+        )
+    elif policy.consistency_objective == "safe-upside":
+        baseline = next(
+            (item for item in successful if int(item["index"]) == 0),
+            successful[0],
+        )
+        safety_floor = minimum(baseline) * policy.upside_safety_ratio
+        safe = [item for item in successful if minimum(item) >= safety_floor]
+        successful = safe or [baseline]
+        key = lambda item: (
+            maximum(item),
+            mean(item),
+            minimum(item),
+            fidelity(item),
+            -int(item["index"]),
+        )
+    else:
+        key = lambda item: (
+            mean(item),
+            minimum(item),
+            fidelity(item),
+            int(item.get("rows", 0)),
+            -int(item["index"]),
+        )
+    return int(max(successful, key=key)["index"])
 
 
 def _evaluation_worker(
@@ -297,10 +387,34 @@ def _safe_task_id(task_id: str) -> str:
 
 
 def _write_json(path: Path, value: Any) -> None:
-    path.write_text(
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
         json.dumps(value, indent=2, ensure_ascii=False, allow_nan=True) + "\n",
         encoding="utf-8",
     )
+    temporary.replace(path)
+
+
+def persist_runtime_policy(
+    *,
+    artifact_root: str | Path,
+    builder_policy: BuilderPolicy,
+    axon_port: int,
+) -> Path:
+    """Publish non-secret startup state used by Gate-0 monitoring."""
+
+    path = Path(artifact_root) / "_runtime" / "miner.json"
+    _write_json(
+        path,
+        {
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "pid": os.getpid(),
+            "axon_port": int(axon_port),
+            "builder_policy": builder_policy.as_dict(),
+        },
+    )
+    return path
 
 
 def persist_task_envelope(
@@ -330,6 +444,14 @@ def persist_task_envelope(
         },
     )
     envelope_path.chmod(0o600)
+    _write_json(
+        Path(artifact_root) / "_runtime" / "last_request.json",
+        {
+            "task_id": task.id,
+            "caller_hotkey": caller_hotkey,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return envelope_path
 
 
@@ -371,7 +493,9 @@ def process_live_task(
     caller_hotkey: str,
     artifact_root: str | Path = "artifacts/live",
     round_seeds: list[int] | None = None,
+    builder_policy: BuilderPolicy | None = None,
 ) -> dict[str, Any]:
+    policy = builder_policy or DEFAULT_BUILDER_POLICY
     persist_task_envelope(
         task=task,
         presigned_url=presigned_url,
@@ -417,6 +541,7 @@ def process_live_task(
         "deadline_source": deadline_source,
         "url_seconds_remaining_at_receipt": url_seconds_remaining,
         "upload_start_budget_seconds": upload_start_budget,
+        "builder_policy": policy.as_dict(),
     }
     _write_json(status_path, status)
 
@@ -469,6 +594,12 @@ def process_live_task(
             contract,
             task.id,
             supplied_seeds=round_seeds,
+            stress_seed_ensemble_id=policy.stress_seed_ensemble_id,
+        )
+        selection_profile = (
+            seed_plan.selection_profile
+            if seed_plan.mode != "robust-unknown"
+            else policy.unknown_seed_selection_profile
         )
         submission, builder_diagnostics = build_submission(
             contract=contract,
@@ -476,13 +607,14 @@ def process_live_task(
             chromosome_11=artifacts.chromosome_11,
             cell_types=cell_types,
             deadline_monotonic=builder_deadline,
-            selection_profile=seed_plan.selection_profile,
+            selection_profile=selection_profile,
             round_seeds=list(seed_plan.optimization_seeds),
+            builder_policy=policy,
         )
         candidates = (
             [("contract-seed-aware-full", submission)]
             if seed_plan.mode == "contract-authoritative"
-            else _candidate_variants(submission)
+            else _candidate_variants(submission, policy)
         )
         artifact_paths = {
             "contract_path": str(contract_path.resolve()),
@@ -508,17 +640,7 @@ def process_live_task(
             and item.get("index") is not None
             and math.isfinite(float(item["final_score"]))
         ]
-        selected_index = 0
-        if successful_scores:
-            selected_index = max(
-                successful_scores,
-                key=lambda item: (
-                    min(item.get("per_seed_final_scores") or [float("-inf")]),
-                    float(item["final_score"]),
-                    int(item.get("rows", 0)),
-                    -int(item["index"]),
-                ),
-            )["index"]
+        selected_index = _select_candidate_index(candidate_scores, policy)
         selected_label, submission = candidates[selected_index]
         scoring_diagnostics = {
             "candidate_count": len(candidates),
@@ -528,10 +650,11 @@ def process_live_task(
             "selected_label": selected_label,
             "fallback_to_unscored_baseline": not successful_scores,
             "selection_objective": (
-                "maximin-holdout-then-mean"
+                policy.consistency_objective
                 if seed_plan.mode != "contract-authoritative"
                 else "authoritative-contract-seed"
             ),
+            "builder_policy": policy.as_dict(),
             "seed_policy": seed_plan.as_dict(),
             "results": candidate_scores,
         }
@@ -542,6 +665,7 @@ def process_live_task(
                 "selected_candidate": selected_label,
                 "local_scoring_deadline_reached": scoring_deadline_reached,
                 "seed_policy": seed_plan.as_dict(),
+                "builder_policy": policy.as_dict(),
             }
         )
         submission_raw = json.dumps(
@@ -565,6 +689,7 @@ def process_live_task(
                     upload_started_monotonic > upload_start_deadline
                 ),
                 "seed_policy": seed_plan.as_dict(),
+                "builder_policy": policy.as_dict(),
             }
         )
         _write_json(status_path, status)
@@ -606,6 +731,7 @@ def process_live_task(
                 ),
                 "comparable_to_official": seed_plan.comparable_to_official,
                 "seed_policy": seed_plan.as_dict(),
+                "builder_policy": policy.as_dict(),
             }
         )
         _write_json(task_dir / "local_validation.json", local_payload)
@@ -613,6 +739,21 @@ def process_live_task(
             "task_id": task.id,
             "received_at": received_at,
             "uploaded_at": uploaded_at,
+            "builder_policy": policy.as_dict(),
+            "candidate_count": len(candidates),
+            "selected_candidate": selected_label,
+            "local_metrics": {
+                "final_score": local_result.final_score,
+                "total_weighted_score": local_result.breakdown.get(
+                    "total_weighted_score"
+                ),
+                "consistency_factor": local_result.breakdown.get(
+                    "consistency_factor"
+                ),
+                "distribution_fidelity_factor": local_result.breakdown.get(
+                    "distribution_fidelity_factor"
+                ),
+            },
             "files": {
                 "contract.json": sha256_bytes(contract_raw),
                 "hbb_reference.json": sha256_bytes(reference_raw),

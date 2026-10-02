@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 import httpx
 
+from .calibration import calibrated_prediction
 from .collector import CONFIG_RE, _tail_text
 from .state import build_dashboard_snapshot, parse_time, safe_json
 
@@ -33,6 +34,9 @@ class MinerLaneConfig:
     bridge_process: str
     axon_port: int
     profile: str
+    builder_policy: str = "champion-v1"
+    expected_guide_variants: int = 72
+    expected_primary_cas_share: float = 0.60
 
 
 def collect_fleet_pm2(
@@ -228,6 +232,7 @@ def build_fleet_state(
                 "hotkey": lane.hotkey,
                 "hotkey_short": f"{lane.hotkey[:6]}…{lane.hotkey[-5:]}",
                 "profile": lane.profile,
+                "builder_policy": lane.builder_policy,
                 "axon_port": lane.axon_port,
                 "online": online,
                 "overall": lane_overall,
@@ -284,6 +289,7 @@ class FleetDashboardCollector:
         network: str = "finney",
         expected_variants: int = 72,
         expected_primary_share: float = 0.60,
+        calibration_model_path: Path | None = None,
     ) -> None:
         self.lanes = tuple(lanes)
         self.score_url = score_url
@@ -292,6 +298,7 @@ class FleetDashboardCollector:
             "guide_variants": expected_variants,
             "primary_cas_share": expected_primary_share,
         }
+        self.calibration_model_path = calibration_model_path
         self.processes: dict[str, dict[str, Any]] = {}
         self.loaded_config: dict[str, dict[str, Any]] = {}
         self.current_block: int | None = None
@@ -431,20 +438,42 @@ class FleetDashboardCollector:
 
     def _build_lane_snapshots(self) -> dict[str, dict[str, Any]]:
         snapshots = {}
+        calibration_model = (
+            safe_json(self.calibration_model_path)
+            if self.calibration_model_path is not None
+            else None
+        )
         for lane in self.lanes:
             role_processes, role_config = _role_maps(
                 lane, self.processes, self.loaded_config
             )
-            snapshots[lane.lane_id] = build_dashboard_snapshot(
+            snapshot = build_dashboard_snapshot(
                 lane.artifact_root,
                 processes=role_processes,
                 current_block=self.current_block,
                 chain_source=self.chain_source,
                 scoreboards=self.scoreboards,
                 miner_hotkey=lane.hotkey,
-                expected_config=self.expected_config,
+                expected_config={
+                    "guide_variants": lane.expected_guide_variants,
+                    "primary_cas_share": lane.expected_primary_cas_share,
+                },
                 loaded_config=role_config,
             )
+            current = snapshot.get("current") or {}
+            local = current.get("local") or {}
+            if local.get("score_semantics") == "unknown-seed-holdout-estimate":
+                current["calibration"] = calibrated_prediction(
+                    local.get("score"),
+                    calibration_model,
+                    builder_policy=lane.builder_policy,
+                )
+            else:
+                current["calibration"] = {
+                    "available": False,
+                    "reason": "local-score-is-already-exact",
+                }
+            snapshots[lane.lane_id] = snapshot
         return snapshots
 
     def _query_block(self) -> int:
@@ -460,7 +489,7 @@ class FleetDashboardCollector:
             if not lane.artifact_root.exists():
                 continue
             for task_dir in lane.artifact_root.iterdir():
-                if not task_dir.is_dir():
+                if not task_dir.is_dir() or task_dir.name.startswith("_"):
                     continue
                 bridge = safe_json(task_dir / "seed_bridge_status.json") or {}
                 observed = parse_time(bridge.get("last_observed_at"))

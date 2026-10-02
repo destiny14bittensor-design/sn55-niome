@@ -257,7 +257,7 @@ class DashboardCollector:
         if not self.artifact_root.exists():
             return None
         for task_dir in self.artifact_root.iterdir():
-            if not task_dir.is_dir():
+            if not task_dir.is_dir() or task_dir.name.startswith("_"):
                 continue
             bridge = safe_json(task_dir / "seed_bridge_status.json") or {}
             observed = parse_time(bridge.get("last_observed_at"))

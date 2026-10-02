@@ -17,6 +17,7 @@ from typing import Any
 BASE_BLOCK_NUMBER = 8_843_300
 INTERVAL_BLOCKS = 720
 VALIDATION_OFFSET = 18
+TARGET_RANK = 80
 ACTIVE_BRIDGE_STATES = {
     "created",
     "opening",
@@ -129,6 +130,10 @@ def _official_summary(
             "rank": None,
             "top_score": None,
             "gap_to_first": None,
+            "target_rank": TARGET_RANK,
+            "target_score": None,
+            "gap_to_target": None,
+            "reached_target": False,
             "participants": 0,
             "published_at": None,
             "breakdown": {},
@@ -144,6 +149,11 @@ def _official_summary(
         None,
     )
     top_score = _number(ordered[0].get("final_score")) if ordered else None
+    target_score = (
+        _number(ordered[TARGET_RANK - 1].get("final_score"))
+        if len(ordered) >= TARGET_RANK
+        else None
+    )
     score = _number(mine.get("final_score")) if mine else None
     rank = ordered.index(mine) + 1 if mine else None
     return {
@@ -152,6 +162,14 @@ def _official_summary(
         "rank": rank,
         "top_score": top_score,
         "gap_to_first": (score - top_score) if score is not None and top_score is not None else None,
+        "target_rank": TARGET_RANK,
+        "target_score": target_score,
+        "gap_to_target": (
+            score - target_score
+            if score is not None and target_score is not None
+            else None
+        ),
+        "reached_target": bool(rank is not None and rank <= TARGET_RANK),
         "participants": len(ordered),
         "published_at": mine.get("created_at") if mine else None,
         "breakdown": dict(mine.get("breakdown") or {}) if mine else {},
@@ -289,7 +307,10 @@ def _config_summary(
     expected_variants = int(expected.get("guide_variants", 72))
     expected_share = float(expected.get("primary_cas_share", 0.60))
     evidence = []
-    for process_name in ("niome-dollar1", "niome-seed-bridge"):
+    # Honest first-submission policies execute in the miner.  The bridge is a
+    # read-only/disabled legacy observer and must not make a valid miner policy
+    # look misconfigured merely because it retains the old 60/40 constants.
+    for process_name in ("niome-dollar1",):
         value = loaded.get(process_name) or {}
         variants = value.get("guide_variants")
         share = value.get("primary_cas_share")
@@ -358,7 +379,11 @@ def _alerts(
             "severity": severity,
             "code": "builder_config_unverified",
             "title": "개선 설정 확인 필요",
-            "detail": "두 프로세스의 variants=72, Cas9=60% 런타임 증거가 일치하지 않습니다.",
+            "detail": (
+                "빌더 런타임 증거가 기대 설정과 일치하지 않습니다: "
+                f"variants={config['expected']['guide_variants']}, "
+                f"Cas9={float(config['expected']['primary_cas_share']) * 100:.0f}%."
+            ),
         })
 
     bridge_state = bridge_lane["state"]
@@ -551,6 +576,8 @@ def build_dashboard_snapshot(
     if artifact_root.exists():
         for path in artifact_root.iterdir():
             if not path.is_dir():
+                continue
+            if path.name.startswith("_"):
                 continue
             status = safe_json(path / "status.json") or {}
             task = safe_json(path / "task.json") or {}

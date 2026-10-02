@@ -9,6 +9,10 @@ import random
 import time
 from typing import Any
 
+from niome_subnet.genomics.builder_policy import (
+    BuilderPolicy,
+    DEFAULT_BUILDER_POLICY,
+)
 from niome_subnet.genomics.consistency_control import (
     PARTIAL_SEED_ANCHOR,
     all_seed_hdr_share_for_target,
@@ -257,6 +261,7 @@ def build_submission(
     consistency_candidate_submissions: (
         list[tuple[str, list[dict[str, Any]]]] | None
     ) = None,
+    builder_policy: BuilderPolicy | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Generate valid, diverse rows and rank within each coverage bucket.
 
@@ -266,6 +271,10 @@ def build_submission(
     authoritative validator seeds; unknown seeds stay on the structural ranked
     path and are evaluated out-of-sample by the task processor.
     """
+    policy = builder_policy or DEFAULT_BUILDER_POLICY
+    guide_variants_limit = policy.guide_variants_per_target
+    primary_cas_share = policy.primary_cas_share
+    minority_mutation_share = policy.minority_mutation_share
     managed_consistency_target = (
         max(0.0, min(1.0, float(consistency_target)))
         if consistency_target is not None and round_seeds and len(round_seeds) >= 3
@@ -379,6 +388,7 @@ def build_submission(
                             max_mismatches=int(
                                 contract["rules"].get("max_mismatches", 0)
                             ),
+                            limit=guide_variants_limit,
                         ):
                             identity = "|".join(
                                 [mutation, cas, strand, str(start), str(length), guide]
@@ -534,7 +544,7 @@ def build_submission(
                 math.ceil(
                     target_count
                     * focus_mutation_share
-                    * PRIMARY_CAS_SHARE
+                    * primary_cas_share
                     / 2
                     * SEED_FOCUSED_RESERVOIR_RESERVE_FACTOR
                 ),
@@ -701,8 +711,21 @@ def build_submission(
 
     def rank_key(item: tuple[float, dict[str, Any]]) -> tuple[Any, ...]:
         score, experiment = item
+        # A bounded salted perturbation only changes exact/near ties.  The
+        # selection profile and quotas create the material lane separation;
+        # this prevents identical ordering inside otherwise equal pools.
+        identity = "|".join(
+            (
+                policy.tie_break_salt,
+                str(experiment.get("experiment_id", "")),
+            )
+        )
+        tie_fraction = int.from_bytes(
+            hashlib.sha256(identity.encode()).digest()[:8], "big"
+        ) / float(2**64 - 1)
+        adjusted_score = score - policy.diversity_weight * tie_fraction * 1e-6
         return (
-            -score,
+            -adjusted_score,
             experiment["mutation"],
             experiment["cas_system"],
             experiment["strand"],
@@ -722,7 +745,7 @@ def build_submission(
         minority_share = (
             SEED_AWARE_MIN_MUTATION_SHARE
             if selection_profile == "seed-aware" and round_seeds
-            else MIN_MUTATION_SHARE
+            else minority_mutation_share
         )
         floor = minority_share / (len(active_mutations) - 1)
         best_mutation = max(
@@ -745,9 +768,9 @@ def build_submission(
         )
         cas_shares = {
             mutation: (
-                {"Cas9": PRIMARY_CAS_SHARE, "Cas12a": 1.0 - PRIMARY_CAS_SHARE}
+                {"Cas9": primary_cas_share, "Cas12a": 1.0 - primary_cas_share}
                 if mutation == best_mutation
-                else {"Cas9": 1.0 - PRIMARY_CAS_SHARE, "Cas12a": PRIMARY_CAS_SHARE}
+                else {"Cas9": 1.0 - primary_cas_share, "Cas12a": primary_cas_share}
             )
             for mutation in active_mutations
         }
@@ -982,6 +1005,43 @@ def build_submission(
             if not progressed:
                 return
 
+    def add_ranked_reservoir(
+        values: list[tuple[float, dict[str, Any]]],
+        limit: int,
+    ) -> None:
+        """Select a salted payload inside a tightly bounded score frontier.
+
+        Different guide identities decorrelate the unknown-seed experiment
+        hashes.  The raw Stage-2 cutoff bounds structural loss independently of
+        the salt, so diversification can never silently become energy-spread.
+        """
+        if limit <= 0 or not values:
+            return
+        ordered = sorted(values, key=rank_key)
+        tolerance = policy.near_tie_score_tolerance
+        if not policy.tie_break_salt or tolerance <= 0:
+            add_ordered(ordered, limit)
+            return
+        best_score = max(float(score) for score, _ in ordered)
+        cutoff = best_score * (1.0 - tolerance)
+        frontier = [item for item in ordered if float(item[0]) >= cutoff]
+        if len(frontier) < limit:
+            frontier = ordered[:limit]
+
+        def reservoir_key(item: tuple[float, dict[str, Any]]) -> tuple[Any, ...]:
+            score, experiment = item
+            identity = "|".join(
+                (policy.tie_break_salt, str(experiment.get("experiment_id", "")))
+            )
+            digest = hashlib.sha256(identity.encode()).digest()
+            return (digest, -float(score), str(experiment.get("experiment_id", "")))
+
+        before = len(selected)
+        add_ordered(sorted(frontier, key=reservoir_key), limit)
+        remaining = limit - (len(selected) - before)
+        if remaining > 0:
+            add_ordered(ordered, remaining)
+
     def select_initial_submission(
         target: float | None,
         *,
@@ -1007,6 +1067,12 @@ def build_submission(
                     quotas[key],
                     (0.45, 0.60, 0.75, 0.90, 1.0),
                 )
+            elif selection_profile == "fidelity-spread":
+                add_energy_anchored(
+                    values,
+                    quotas[key],
+                    (0.30, 0.50, 0.70, 0.90),
+                )
             elif selection_profile == "cas-separated":
                 anchors = (
                     (0.72, 0.84, 0.94, 1.0)
@@ -1014,6 +1080,19 @@ def build_submission(
                     else (0.25, 0.40, 0.55, 0.68)
                 )
                 add_energy_anchored(values, quotas[key], anchors)
+            elif selection_profile.startswith("ranked-energy-"):
+                energy_share = int(selection_profile.rsplit("-", 1)[1]) / 100.0
+                ranked_count = int(round(quotas[key] * (1.0 - energy_share)))
+                before = len(selected)
+                add_ranked(values, ranked_count)
+                ranked_added = len(selected) - before
+                add_energy_anchored(
+                    values,
+                    max(0, quotas[key] - ranked_added),
+                    (0.45, 0.60, 0.75, 0.90, 1.0),
+                )
+            elif selection_profile == "ranked-reservoir":
+                add_ranked_reservoir(values, quotas[key])
             else:
                 add_ranked(values, quotas[key])
 
@@ -1382,6 +1461,7 @@ def build_submission(
                 break
 
     diagnostics = {
+        "builder_policy": policy.as_dict(),
         "target_count": target_count,
         "selected_count": len(selected),
         "scanned_candidates": scanned,

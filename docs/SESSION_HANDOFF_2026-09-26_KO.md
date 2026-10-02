@@ -694,3 +694,28 @@ dashboard identity에 맞게 보존/재작성한다.
   - `artifacts/research/preseed_shuffle_sampled_bits_discovery16_10k.json`
 - 어떤 sampled stable/biased bit도 사실로 승격하지 않았다. verified seed candidate는 여전히
   0개이며 Holdout seed label, miner/bridge, 제출에는 접근하지 않았다.
+
+## 18. 2026-10-01 부분 seed 적중 감사와 oracle 점수 재생
+
+- 완전한 세 seed 복구 대신 최소 1개 exact hit 또는 작은 Top-K 후보 집합이 가능한지
+  별도로 감사했다. 숫자상 근접은 SHA-256 이후 의미가 없으므로 exact equality만 센다.
+- `tools/preseed_partial_predictor.py`는 640개 공개 블록/task digest 모델을 과거 적중률로만
+  가중하며, target의 seed label을 지운 뒤 순위와 확률을 만든다.
+- `tools/preseed_partial_hit_audit.py`는 Discovery 20개를 시간순으로 놓고 처음 5개 이후
+  15개를 expanding-window로 예측했다. 마지막 4개는 첫 실행 전 고정한 final suffix이고
+  sealed Holdout은 열지 않았다.
+- 네 전략 모두 15라운드 45 slot에서 Top-1 exact hit가 `0`이었다. 주 전략의 final suffix
+  Top-20은 `1/12`였지만 raw p 약 `0.2364`, Bonferroni 보정 p `1.0`으로 무작위 기준을
+  넘지 못했다. 판정은 **C: partial prediction not above random baseline**이다.
+- `tools/preseed_partial_score_replay.py`로 final-suffix task `ff481da5…`를 로컬 재생했다.
+  공식 seed는 `921,816,217`이며 네 결과는 다음과 같다.
+  - 기존 robust: `19.7918`
+  - 1-seed oracle: `92.5867` (`+72.7950`, `4.68x`)
+  - 2-seed oracle: `165.6882` (`+145.8965`, `8.37x`)
+  - 3-seed oracle: `236.7364` (`+216.9446`, `11.96x`)
+- 따라서 부분 seed의 점수 가치는 매우 크지만 현재 공개 신호로는 예측하지 못했다.
+  final suffix는 이미 소비됐으므로 새 모델을 여기에 맞춘 뒤 검증 성공이라 부르면 안 된다.
+  새 독립 입력이 생기면 모델을 먼저 동결하고 최소 두 미래 라운드에서 다시 검증해야 한다.
+- 상세 보고서는 `docs/preseed_partial_prediction_report.md`, runtime JSON은
+  `artifacts/research/preseed_partial_hit_audit.json`과
+  `artifacts/research/preseed_partial_score_replay_ff481.json`이다.

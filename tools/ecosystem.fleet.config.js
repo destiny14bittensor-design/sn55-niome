@@ -3,48 +3,64 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const python = path.join(root, ".venv", "bin", "python");
 const externalIp = process.env.NIOME_EXTERNAL_IP || "69.30.204.53";
-const walletPath = "/home/administrator/.bittensor/wallets/main";
+const walletPath =
+  process.env.NIOME_WALLET_PATH || "/home/administrator/.bittensor/wallets/main";
+const validatorWalletPath =
+  process.env.NIOME_SEED_VALIDATOR_WALLET_PATH ||
+  "/home/administrator/.bittensor/wallets";
 
 const lanes = [
   {
-    id: "dollar1",
-    wallet: "main3",
-    hotkey: "bitcoin1",
-    miner: "niome-dollar1",
-    bridge: "niome-seed-bridge",
+    id: "tao1",
+    wallet: process.env.NIOME_TAO1_WALLET || "main1",
+    hotkey: process.env.NIOME_TAO1_HOTKEY || "tao1",
+    miner: "niome-tao1",
+    bridge: "niome-seed-bridge-tao1",
     port: 8091,
-    artifactRoot: path.join(root, "artifacts", "live"),
-    explorationProfile: null,
+    artifactRoot: path.join(root, "artifacts", "miners", "tao1"),
+    builderPolicy: "champion-v1",
+    explorationProfile:
+      process.env.NIOME_TAO1_SS58 ||
+      "5GbhpWKt2SYHaZMHNy2WAsm5pzkGL5sRa7DFnYu9zJY3qYGC",
   },
   {
-    id: "dollar2",
-    wallet: "main3",
-    hotkey: "bitcoin2",
-    miner: "niome-dollar2",
-    bridge: "niome-seed-bridge-dollar2",
+    id: "tao2",
+    wallet: process.env.NIOME_TAO2_WALLET || "main1",
+    hotkey: process.env.NIOME_TAO2_HOTKEY || "tao2",
+    miner: "niome-tao2",
+    bridge: "niome-seed-bridge-tao2",
     port: 8092,
-    artifactRoot: path.join(root, "artifacts", "miners", "dollar2"),
-    explorationProfile: "5H1jPksvzJuak6P63VAp7QttcRpQ1PuT9BNDyMT3qGEYovdQ",
+    artifactRoot: path.join(root, "artifacts", "miners", "tao2"),
+    builderPolicy: "champion-reservoir001-cas55-v3",
+    explorationProfile:
+      process.env.NIOME_TAO2_SS58 ||
+      "5Ehx52VbhGyvmZVcvaRF2dG8JVJUMHHreRBLRsGMkJ695zih",
   },
   {
-    id: "dollar3",
-    wallet: "main4",
-    hotkey: "hype1",
-    miner: "niome-dollar3",
-    bridge: "niome-seed-bridge-dollar3",
+    id: "won1",
+    wallet: process.env.NIOME_WON1_WALLET || "main2",
+    hotkey: process.env.NIOME_WON1_HOTKEY || "won1",
+    miner: "niome-won1",
+    bridge: "niome-seed-bridge-won1",
     port: 8093,
-    artifactRoot: path.join(root, "artifacts", "miners", "dollar3"),
-    explorationProfile: "5EeqkTcDzGg7Ge89N1DJzQv5ehyCEPMBreCHqcxfEpB3WU21",
+    artifactRoot: path.join(root, "artifacts", "miners", "won1"),
+    builderPolicy: "champion-reservoir003-cas65-v3",
+    explorationProfile:
+      process.env.NIOME_WON1_SS58 ||
+      "5CPsx7spR4FCr786VBTqxuNGaoWnMfe91fcQKEYig3eVbTbi",
   },
   {
-    id: "dollar4",
-    wallet: "main4",
-    hotkey: "hype2",
-    miner: "niome-dollar4",
-    bridge: "niome-seed-bridge-dollar4",
+    id: "won2",
+    wallet: process.env.NIOME_WON2_WALLET || "main2",
+    hotkey: process.env.NIOME_WON2_HOTKEY || "won2",
+    miner: "niome-won2",
+    bridge: "niome-seed-bridge-won2",
     port: 8094,
-    artifactRoot: path.join(root, "artifacts", "miners", "dollar4"),
-    explorationProfile: "5HKLhT3ie4VkW9hG3Vgn2MiYgZ9PQtVnFbJ18fmDh5ZkWY86",
+    artifactRoot: path.join(root, "artifacts", "miners", "won2"),
+    builderPolicy: "champion-reservoir005-v3",
+    explorationProfile:
+      process.env.NIOME_WON2_SS58 ||
+      "5E6ttv44E9Ko8NAsYerT4atZummaYxYXGzkTNHNUgXmXEvb4",
   },
 ];
 
@@ -60,9 +76,11 @@ const bridgeApps = lanes.map((lane) => ({
   env: {
     NIOME_ARTIFACT_ROOT: lane.artifactRoot,
     NIOME_ENABLE_UNVERIFIED_SAME_ROUND_OVERWRITE: "false",
-    NIOME_SEED_VALIDATOR_WALLET_NAME: "main",
-    NIOME_SEED_VALIDATOR_WALLET_HOTKEY: "dollar2",
-    NIOME_SEED_VALIDATOR_WALLET_PATH: "/home/administrator/.bittensor/wallets",
+    NIOME_SEED_VALIDATOR_WALLET_NAME:
+      process.env.NIOME_SEED_VALIDATOR_WALLET_NAME || "main",
+    NIOME_SEED_VALIDATOR_WALLET_HOTKEY:
+      process.env.NIOME_SEED_VALIDATOR_WALLET_HOTKEY || "dollar2",
+    NIOME_SEED_VALIDATOR_WALLET_PATH: validatorWalletPath,
     ...(lane.explorationProfile
       ? { NIOME_EXPLORATION_PROFILE: lane.explorationProfile }
       : {}),
@@ -92,6 +110,7 @@ const minerApps = lanes.map((lane) => ({
   env: {
     PYTHONPATH: root,
     NIOME_ARTIFACT_ROOT: lane.artifactRoot,
+    NIOME_BUILDER_POLICY: lane.builderPolicy,
   },
 }));
 
@@ -110,6 +129,9 @@ const dashboard = {
     NIOME_DASH_NETWORK: "finney",
     NIOME_DASH_GUIDE_VARIANTS: "72",
     NIOME_DASH_PRIMARY_CAS_SHARE: "0.60",
+    NIOME_FEDERATION_LOCAL_ID: "tao-won-local",
+    NIOME_FEDERATION_LOCAL_LABEL: "Tao / Won Local",
+    NIOME_FEDERATION_REMOTE_SOURCES: "[]",
     NIOME_SEED_RESEARCH_STATE: path.join(root, "artifacts", "research", "seed_research_state.json"),
   },
 };

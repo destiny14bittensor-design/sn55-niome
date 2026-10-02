@@ -1,10 +1,15 @@
+const path = require("path");
+
+const root = process.env.NIOME_REPO_ROOT || path.resolve(__dirname, "..");
+const python = path.join(root, ".venv", "bin", "python");
+
 module.exports = {
   apps: [
     {
       name: "niome-dashboard",
-      cwd: "/home/administrator/workspace/subnet-niome",
+      cwd: root,
       script: "tools/niome_dashboard.py",
-      interpreter: "/home/administrator/workspace/subnet-niome/.venv/bin/python",
+      interpreter: python,
       autorestart: true,
       watch: false,
       max_memory_restart: "450M",
@@ -15,15 +20,9 @@ module.exports = {
         NIOME_DASH_NETWORK: "finney",
         NIOME_DASH_GUIDE_VARIANTS: "72",
         NIOME_DASH_PRIMARY_CAS_SHARE: "0.60",
-        NIOME_FEDERATION_LOCAL_ID: "bitcoin-hype-fleet",
-        NIOME_FEDERATION_LOCAL_LABEL: "Bitcoin / Hype Fleet",
-        NIOME_FEDERATION_REMOTE_SOURCES: JSON.stringify([
-          {
-            id: "tao-fleet",
-            label: "Tao / Won Fleet",
-            url: "http://108.181.196.26:8111/api/fleet/state",
-          },
-        ]),
+        NIOME_FEDERATION_LOCAL_ID: "tao-won-local",
+        NIOME_FEDERATION_LOCAL_LABEL: "Tao / Won Local",
+        NIOME_FEDERATION_REMOTE_SOURCES: "[]",
         NIOME_FEDERATION_POLL_SECONDS: "2",
         NIOME_FEDERATION_TIMEOUT_SECONDS: "2",
       },

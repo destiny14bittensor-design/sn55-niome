@@ -108,6 +108,7 @@ def resolve_seed_plan(
     supplied_seeds: Iterable[int] | None = None,
     trust_supplied_seeds: bool = False,
     accept_zero_contract_seed: bool = False,
+    stress_seed_ensemble_id: str = "default-v1",
 ) -> SeedPlan:
     """Choose authoritative legacy seeds or a quarantine-safe stress ensemble."""
     raw = contract.get("seed")
@@ -158,7 +159,7 @@ def resolve_seed_plan(
     excluded = set(contract_seeds) | set(supplied)
     holdout = deterministic_stress_seeds(
         task_id,
-        domain="robust-holdout",
+        domain=f"robust-holdout|{stress_seed_ensemble_id}",
         count=ROBUST_HOLDOUT_SEED_COUNT,
         exclude=excluded,
     )

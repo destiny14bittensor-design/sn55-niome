@@ -15,8 +15,8 @@
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"><span></span></div>
         <div>
-          <p class="eyebrow">SUBNET 55 · FEDERATED CONTROL PLANE</p>
-          <h1>NIOME Federated Control</h1>
+          <p class="eyebrow">SUBNET 55 · MINER OPERATIONS</p>
+          <h1>NIOME Submission Control</h1>
         </div>
       </div>
       <div class="top-actions">
@@ -57,99 +57,6 @@
       </section>
     </section>
 
-    <section class="panel research-panel" aria-labelledby="research-title">
-      <div class="research-heading">
-        <div>
-          <p class="eyebrow">DUAL RESEARCH AUTOPILOT · PARALLEL TRACKS</p>
-          <h3 id="research-title">채점 전 seed 확보 연구</h3>
-          <p class="research-heading-copy">서로 독립적인 두 경로를 병렬 검증하며, 관측된 사실과 아직 통과하지 못한 가설을 분리해 표시합니다.</p>
-        </div>
-        <div class="research-heading-meta">
-          <span id="research-health" class="read-only">자동화기 확인 중</span>
-          <span id="research-updated" class="mini-badge">갱신 대기</span>
-        </div>
-      </div>
-
-      <div class="research-track-grid">
-        <article id="generator-track" class="research-track generator-track" aria-labelledby="generator-track-title">
-          <header class="research-track-head">
-            <div class="research-track-identity">
-              <span class="track-letter" aria-hidden="true">A</span>
-              <div>
-                <p>TRACK A · PREDICTION</p>
-                <h4 id="generator-track-title">채점 전 seed 생성기</h4>
-              </div>
-            </div>
-            <span id="generator-status" class="track-status waiting">상태 연결 중</span>
-          </header>
-          <p class="track-definition">공개 점수나 공식 seed가 나오기 전에 seed를 기록하고, 이후 exact 여부를 검증하는 경로입니다.</p>
-          <div class="track-action">
-            <span class="track-action-label">지금 수행 중</span>
-            <h5 id="generator-action-title">연구 상태 확인 중</h5>
-            <p id="generator-action-detail">생성기 연구 자동화기의 상태를 불러오고 있습니다.</p>
-            <code id="generator-action-task">task 자동 선택</code>
-          </div>
-          <div class="track-evidence" aria-label="생성기 연구 핵심 증거">
-            <div><span>학습 라벨</span><strong id="generator-labels">—</strong><small id="generator-labels-meta">안정 epoch</small></div>
-            <div><span>모델 평가 상태</span><strong id="generator-models">—</strong><small id="generator-models-meta">등록·평가·입력부족 분리</small></div>
-            <div><span>사전 exact</span><strong id="generator-forward">—</strong><small id="generator-forward-meta">공개 전 기록만 인정</small></div>
-          </div>
-          <div>
-            <div class="track-section-label"><span>통과 관문</span><small>모든 관문을 통과해야 신뢰 가능</small></div>
-            <div id="generator-gates" class="track-gates"></div>
-          </div>
-          <div class="track-evidence-note">
-            <strong>증거 판정</strong>
-            <p id="generator-evidence">점수 공개 후 역산은 관측 도구이며 사전예측 성공으로 세지 않습니다.</p>
-          </div>
-          <footer class="track-safety"><span id="generator-safety" class="authorization-label">SHADOW · 제출 쓰기 없음</span></footer>
-        </article>
-
-        <article id="early-score-track" class="research-track early-score-track" aria-labelledby="early-score-track-title">
-          <header class="research-track-head">
-            <div class="research-track-identity">
-              <span class="track-letter" aria-hidden="true">B</span>
-              <div>
-                <p>TRACK B · OBSERVABILITY</p>
-                <h4 id="early-score-track-title">조기 개별 점수 획득 경로</h4>
-              </div>
-            </div>
-            <span id="early-score-status" class="track-status waiting">상태 연결 중</span>
-          </header>
-          <p class="track-definition">전체 점수 일괄 공개보다 먼저 한 마이너의 개별 점수를 합법적 관측 경로에서 확보할 수 있는지 검증합니다.</p>
-          <div class="track-action">
-            <span class="track-action-label">지금 수행 중</span>
-            <h5 id="early-score-action-title">관측 경로 준비</h5>
-            <p id="early-score-action-detail">조기 개별 점수 신호와 일괄 공개 신호를 구분해 기록합니다.</p>
-            <code id="early-score-action-task">task 자동 선택</code>
-          </div>
-          <div class="track-evidence" aria-label="조기 점수 연구 핵심 증거">
-            <div><span>조기 개별 신호</span><strong id="early-score-hits">—</strong><small id="early-score-hits-meta">batch보다 앞선 결과만 인정</small></div>
-            <div><span>확보 선행시간</span><strong id="early-score-lead">—</strong><small id="early-score-lead-meta">제출 여유 판정 전</small></div>
-            <div><span>일괄 공개 관측</span><strong id="early-score-batch">—</strong><small id="early-score-batch-meta">조기 신호 아님</small></div>
-          </div>
-          <div>
-            <div class="track-section-label"><span>통과 관문</span><small>시간 선후관계와 재현성을 함께 검증</small></div>
-            <div id="early-score-gates" class="track-gates"></div>
-          </div>
-          <div class="track-evidence-note">
-            <strong>증거 판정</strong>
-            <p id="early-score-evidence">현재 공개 API의 batch score는 채점 종료 후 신호이므로 실행 가능한 조기 개별 점수가 아닙니다.</p>
-          </div>
-          <footer class="track-safety"><span id="early-score-safety" class="authorization-label">READ ONLY · 허가된 경로만 관측</span></footer>
-        </article>
-      </div>
-
-      <div class="research-observation-strip">
-        <div class="observation-summary">
-          <span>공통 관측 기반</span>
-          <strong id="research-probe">—</strong>
-          <small id="research-probe-meta">점수 공개 후 seed 역산 검증</small>
-        </div>
-        <div id="research-rounds" class="research-rounds" aria-label="최근 seed 연구 라운드"></div>
-      </div>
-    </section>
-
     <section class="fleet-hero panel">
       <div class="fleet-primary">
         <div class="hero-status-row">
@@ -158,23 +65,17 @@
         </div>
         <p class="task-label">현재 비교 과제</p>
         <h2 id="active-task">작업을 기다리고 있습니다</h2>
-        <p class="subtle">두 서버를 읽기 전용으로 통합하며 점수 차는 같은 task_id끼리만 계산합니다.</p>
+        <p class="subtle">활성 마이너의 최초 일반 제출만 추적하며 점수 차는 같은 task_id끼리만 계산합니다.</p>
       </div>
       <div class="fleet-kpis">
         <div><span>온라인</span><strong id="online-count">—</strong></div>
-        <div><span>소스 연결</span><strong id="source-count">—</strong></div>
+        <div><span>제출 완료</span><strong id="submitted-count">—</strong></div>
         <div><span>Task 최고</span><strong id="baseline-score">—</strong></div>
         <div><span>현재 블록</span><strong id="current-block">—</strong></div>
         <div><span>라운드 단계</span><strong id="round-phase">—</strong></div>
         <div><span>데이터 갱신</span><strong id="freshness">—</strong></div>
       </div>
     </section>
-
-    <section class="section-heading source-heading">
-      <div><p class="eyebrow">SOURCE HEALTH</p><h2>Fleet 연결 상태</h2></div>
-      <p>각 서버의 원본 수집기는 독립적으로 유지됩니다.</p>
-    </section>
-    <section id="source-grid" class="source-grid" aria-label="Fleet 소스 상태"></section>
 
     <section class="section-heading">
       <div><p class="eyebrow">FLEET OVERVIEW</p><h2 id="miner-count-heading">통합 마이너 상태</h2></div>
@@ -189,7 +90,7 @@
       </div>
       <div class="table-wrap">
         <table class="comparison-table">
-          <thead><tr><th>Fleet</th><th>마이너</th><th>UID</th><th>단계</th><th>안전 제출</th><th>브리지</th><th>최종 PUT</th><th>로컬</th><th>공식 / 순위</th><th>최고 대비</th><th>CPU</th><th>RAM</th></tr></thead>
+          <thead><tr><th>마이너</th><th>UID</th><th>현재 단계</th><th>일반 제출</th><th>로컬 검증</th><th>공식 / 순위</th><th>최고 대비</th><th>CPU</th><th>RAM</th></tr></thead>
           <tbody id="comparison-body"></tbody>
         </table>
       </div>
@@ -200,33 +101,23 @@
       <div class="detail-identity"><span id="detail-source">—</span><span id="detail-profile">baseline</span></div>
     </section>
 
-    <section class="lanes">
-      <article class="lane panel">
-        <div class="lane-title"><span class="lane-index">A</span><div><h3>안전 제출 경로</h3><p>수신 즉시 기본 결과를 확보하는 경로</p></div></div>
-        <div id="safe-steps" class="steps"></div>
-      </article>
+    <section class="lanes submission-lane">
       <article class="lane panel accent-panel">
-        <div class="lane-title"><span class="lane-index">B</span><div><h3>시드 기반 개선 경로</h3><p>시드 수신부터 공식 채점까지의 경로</p></div></div>
-        <div id="bridge-steps" class="steps bridge-steps"></div>
+        <div class="lane-title"><span class="lane-index">→</span><div><h3>일반 제출 흐름</h3><p>쿼리 수신부터 공식 점수 발표까지 한 번의 제출을 추적합니다.</p></div></div>
+        <div id="submission-steps" class="steps"></div>
       </article>
     </section>
 
     <section class="metric-grid">
       <article class="metric panel"><p>로컬 점수</p><strong id="local-score">—</strong><span id="local-source">채점 대기</span></article>
+      <article class="metric panel"><p>보정 예상점수</p><strong id="calibrated-score">—</strong><span id="calibrated-range">과거 자료 학습 대기</span></article>
       <article class="metric panel"><p>공식 점수 / 순위</p><strong id="official-score">—</strong><span id="official-rank">공식 검증 전</span></article>
       <article class="metric panel"><p id="score-delta-label">동일 task 최고 대비</p><strong id="score-delta">—</strong><span id="delta-source">동일 과제만 비교</span></article>
       <article class="metric panel"><p>일관성</p><strong id="consistency-score">—</strong><span>공식 우선 · 로컬 보조</span></article>
     </section>
 
     <section class="content-grid">
-      <article class="panel span-7">
-        <div class="panel-heading">
-          <div><p class="eyebrow">S3 BRIDGE</p><h3>스트림 생존 상태</h3></div>
-          <span id="stream-summary" class="mini-badge">—</span>
-        </div>
-        <div id="stream-grid" class="stream-grid"><p class="empty">스트림 정보를 기다리고 있습니다.</p></div>
-      </article>
-      <article class="panel span-5">
+      <article class="panel span-4">
         <div class="panel-heading"><div><p class="eyebrow">RUNTIME</p><h3>프로세스와 자원</h3></div></div>
         <div id="process-list" class="process-list"></div>
         <div class="resource-strip">
@@ -235,14 +126,14 @@
           <div><span>재시작</span><strong id="resource-restarts">—</strong></div>
         </div>
       </article>
-      <article class="panel span-7">
+      <article class="panel span-4">
         <div class="panel-heading">
           <div><p class="eyebrow">ALERTS</p><h3>운영 판단</h3></div>
           <span id="alert-count" class="mini-badge">0</span>
         </div>
         <div id="alert-list" class="alert-list"></div>
       </article>
-      <article class="panel span-5 quality-panel">
+      <article class="panel span-4 quality-panel">
         <div class="panel-heading"><div><p class="eyebrow">SCORE QUALITY</p><h3>점수 구성</h3></div></div>
         <div class="quality-list">
           <div><span>Weighted</span><strong id="weighted-score">—</strong></div>
@@ -260,14 +151,14 @@
       </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>수신</th><th>작업</th><th>안전 제출</th><th>브리지</th><th>시드</th><th>로컬 점수</th><th>공식</th></tr></thead>
+          <thead><tr><th>수신</th><th>작업</th><th>일반 제출</th><th>로컬 점수</th><th>공식</th></tr></thead>
           <tbody id="history-body"></tbody>
         </table>
       </div>
     </section>
 
     <footer>
-      <span>읽기 전용 · 두 Fleet의 마이너·Bridge·아티팩트를 변경하지 않습니다.</span>
+      <span>읽기 전용 · 활성 마이너의 일반 제출 상태만 표시합니다.</span>
       <span id="footer-generated">—</span>
     </footer>
   </main>

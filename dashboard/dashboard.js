@@ -3,20 +3,15 @@
 const byId = (id) => document.getElementById(id);
 const stageLabels = {
   query_received: "쿼리 수신",
-  safe_uploaded: "안전 제출 완료",
-  created: "브리지 준비",
-  opening: "브리지 연결",
-  streaming: "스트리밍",
-  waiting_for_contract_seed: "계약 시드 갱신 대기",
-  waiting_for_seeds: "시드 대기",
-  building: "결과 생성",
-  finishing_upload: "최종 PUT",
+  safe_uploaded: "일반 제출 완료",
+  building: "제출물 생성",
+  finishing_upload: "S3 업로드",
   waiting_official: "공식 검증 대기",
   official_published: "공식 점수 발표",
-  bridge_failed: "브리지 실패",
 };
+const ACTIVE_MINERS = new Set(["tao1", "tao2", "won1", "won2"]);
 let latestSnapshot = null;
-let selectedMiner = localStorage.getItem("niome-selected-miner") || "bitcoin-hype-fleet:bitcoin1";
+let selectedMiner = localStorage.getItem("niome-selected-miner") || "";
 let lastNoticeKey = localStorage.getItem("niome-fleet-last-notice") || "";
 let eventStreamLive = false;
 
@@ -329,7 +324,6 @@ function classifyAlert(alert) {
   if (raw.includes("source_unreachable") || raw.includes("연결 실패")) return { title: "Fleet 연결 오류", style: "SOURCE UNREACHABLE" };
   if (raw.includes("offline")) return { title: "프로세스 오프라인", style: "PROCESS OFFLINE" };
   if (raw.includes("s3") || raw.includes("upload") || raw.includes("put")) return { title: "S3 업로드 오류", style: "UPLOAD FAILURE" };
-  if (raw.includes("bridge")) return { title: "Seed Bridge 오류", style: "BRIDGE FAILURE" };
   if (raw.includes("config")) return { title: "설정 검증 경고", style: "CONFIG MISMATCH" };
   const style = String(alert?.code || "runtime_error").replaceAll("_", " ").toUpperCase();
   return { title: alert?.title || "운영 오류", style };
@@ -344,7 +338,11 @@ function renderTopAlerts(snapshot) {
   const fleet = snapshot.fleet || {};
   const panel = byId("alert-summary-panel");
   const list = byId("alert-summary-list");
-  const criticals = (fleet.alerts || []).filter((item) => item.severity === "critical");
+  const criticals = (fleet.alerts || []).filter((item) => {
+    const miner = shortMiner(item.miner);
+    const signal = `${item.code || ""} ${item.title || ""}`.toLowerCase();
+    return item.severity === "critical" && ACTIVE_MINERS.has(miner) && !signal.includes("bridge");
+  });
   const grouped = new Map();
   for (const alert of criticals) {
     const category = classifyAlert(alert);
@@ -361,7 +359,8 @@ function renderTopAlerts(snapshot) {
     const signal = document.createElement("span"); signal.className = "alert-summary-signal";
     const body = document.createElement("div");
     const title = document.createElement("strong"); title.textContent = "긴급 오류 없음";
-    const meta = document.createElement("small"); meta.textContent = `${fleet.sources_online || 0}개 Fleet · ${fleet.online || 0}/${fleet.total || 0} 마이너 online`;
+    const active = (snapshot.miners || []).filter((miner) => ACTIVE_MINERS.has(miner.label));
+    const meta = document.createElement("small"); meta.textContent = `${active.filter((miner) => miner.online).length}/${active.length} 활성 마이너 online`;
     body.append(title, meta); item.append(signal, body); list.append(item);
     return;
   }
@@ -377,16 +376,19 @@ function renderTopAlerts(snapshot) {
   }
 }
 
-function renderFleetHeader(snapshot) {
+function renderFleetHeader(snapshot, miners) {
   const fleet = snapshot.fleet || {};
   const chain = snapshot.chain || {};
   const badge = byId("overall-badge");
   badge.className = `badge ${fleet.overall || "healthy"}`;
-  badge.textContent = fleet.online === fleet.total ? `${fleet.online}/${fleet.total} 온라인` : `${fleet.online || 0}/${fleet.total || 0} 확인 필요`;
-  text("coverage-label", `현재 과제 수신 ${fleet.coverage || 0}/${fleet.total || 0}`);
+  const online = miners.filter((miner) => miner.online).length;
+  const coverage = miners.filter((miner) => miner.current?.task_id === fleet.active_task_id && fleet.active_task_id).length;
+  const submitted = miners.filter((miner) => miner.current?.safe?.uploaded && miner.current?.task_id === fleet.active_task_id).length;
+  badge.textContent = online === miners.length ? `${online}/${miners.length} 온라인` : `${online}/${miners.length} 확인 필요`;
+  text("coverage-label", `현재 과제 수신 ${coverage}/${miners.length}`);
   text("active-task", fleet.active_task_id || "작업을 기다리고 있습니다");
-  text("online-count", `${fleet.online || 0} / ${fleet.total || 0}`);
-  text("source-count", `${fleet.sources_online || 0} / ${fleet.sources_total || 0}`);
+  text("online-count", `${online} / ${miners.length}`);
+  text("submitted-count", `${submitted} / ${miners.length}`);
   text("baseline-score", fmtNumber(fleet.task_top_score, 6));
   text("current-block", chain.block === null || chain.block === undefined ? "—" : Number(chain.block).toLocaleString("ko-KR"));
   text("round-phase", chain.round_phase === null || chain.round_phase === undefined ? "—" : `${chain.round_phase} / 720`);
@@ -430,12 +432,12 @@ function renderSources(sources) {
   }
 }
 
-function renderRanking(ranking) {
+function renderRanking(ranking, activeIds) {
   const body = byId("ranking-body");
   body.replaceChildren();
   text("ranking-task", ranking?.task_id ? `기준 ${shortTask(ranking.task_id)}` : "채점 task 대기");
   text("ranking-previous-task", ranking?.previous_task_id ? `이전 ${shortTask(ranking.previous_task_id)}` : "이전 task —");
-  const rows = ranking?.rows || [];
+  const rows = (ranking?.rows || []).filter((item) => activeIds.has(item.miner_id) || ACTIVE_MINERS.has(item.label));
   if (!rows.length) {
     const empty = document.createElement("p");
     empty.className = "ranking-empty";
@@ -487,13 +489,12 @@ function renderRanking(ranking) {
 function stageDots(current) {
   if (!current) return ["", "", "", "", ""];
   const safe = current.safe || {};
-  const bridge = current.bridge || {};
   return [
     current.received_at ? "complete" : "",
-    safe.uploaded ? "complete" : safe.state === "failed" ? "failed" : "active",
-    (bridge.round_seeds || []).length ? "complete" : bridge.failure ? "failed" : bridge.started_at ? "active" : "",
-    bridge.state === "complete" ? "complete" : bridge.state === "failed" ? "failed" : ["building", "finishing_upload"].includes(bridge.state) ? "active" : "",
-    current.official?.published ? "complete" : bridge.state === "complete" ? "active" : "",
+    safe.submission_rows ? "complete" : current.received_at ? "active" : "",
+    safe.uploaded ? "complete" : safe.state === "failed" ? "failed" : current.received_at ? "active" : "",
+    current.local?.score !== null && current.local?.score !== undefined ? "complete" : safe.uploaded ? "active" : "",
+    current.official?.published ? "complete" : safe.uploaded ? "active" : "",
   ];
 }
 
@@ -561,17 +562,13 @@ function renderComparison(snapshot) {
     const current = miner.current || {};
     const sameTask = Boolean(activeTask && current.task_id === activeTask);
     const safe = current.safe || {};
-    const bridge = current.bridge || {};
     const row = document.createElement("tr");
     row.className = `${miner.id === selectedMiner ? "selected-row" : ""}${sameTask ? "" : " stale-row"}`;
     row.addEventListener("click", () => { selectedMiner = miner.id; localStorage.setItem("niome-selected-miner", selectedMiner); render(snapshot); });
-    appendCell(row, miner.source_label || miner.source_id || "—", "source-name-cell");
     appendCell(row, miner.label, "miner-name-cell");
     appendCell(row, String(miner.uid));
     appendCell(row, sameTask ? (stageLabels[current.stage] || current.stage || "대기") : "다른 과제");
     appendCell(row, safe.uploaded ? "완료" : current.task_id ? "진행" : "—", safe.uploaded ? "positive" : "");
-    appendCell(row, bridge.state || "—");
-    appendCell(row, bridge.put?.http_status ? `HTTP ${bridge.put.http_status}` : bridge.state === "complete" ? "완료" : "—");
     appendCell(row, sameTask ? fmtNumber(current.local?.score, 5) : "—");
     appendCell(row, sameTask && current.official?.published ? `${fmtNumber(current.official.score, 5)} / #${current.official.rank}` : "—");
     const comparison = miner.federation_comparison || {};
@@ -593,21 +590,14 @@ function appendStep(container, label, meta, state) {
 }
 
 function renderLanes(current) {
-  const safeContainer = byId("safe-steps"); safeContainer.replaceChildren();
-  const bridgeContainer = byId("bridge-steps"); bridgeContainer.replaceChildren();
+  const container = byId("submission-steps"); container.replaceChildren();
   const safe = current?.safe || {};
-  const bridge = current?.bridge || {};
-  appendStep(safeContainer, "쿼리 수신", fmtTime(current?.received_at), current?.received_at ? "complete" : "");
-  appendStep(safeContainer, "기본 결과 생성", safe.submission_rows ? `${safe.submission_rows}개 실험` : "대기", safe.submission_rows ? "complete" : current ? "active" : "");
-  appendStep(safeContainer, "S3 안전 제출", safe.uploaded ? `${fmtTime(safe.uploaded_at)} · ${fmtDuration(safe.upload_elapsed_seconds)}` : "대기", safe.uploaded ? "complete" : safe.state === "failed" ? "failed" : current ? "active" : "");
-
-  const seedsReady = Array.isArray(bridge.round_seeds) && bridge.round_seeds.length > 0;
-  const failed = bridge.state === "failed" || Boolean(bridge.failure);
-  appendStep(bridgeContainer, "스트림 연결", bridge.started_at ? fmtTime(bridge.started_at) : "대기", bridge.started_at ? "complete" : current ? "active" : "");
-  appendStep(bridgeContainer, "시드 확보", seedsReady ? `[${bridge.round_seeds.join(", ")}]` : bridge.seed_target_block ? `${bridge.blocks_to_seeds ?? "—"} 블록 남음` : "대기", seedsReady ? "complete" : failed ? "failed" : bridge.started_at ? "active" : "");
-  appendStep(bridgeContainer, "결과 생성", bridge.build_elapsed_seconds ? fmtDuration(bridge.build_elapsed_seconds) : "대기", bridge.state === "complete" || bridge.state === "finishing_upload" ? "complete" : bridge.state === "building" ? "active" : failed ? "failed" : "");
-  appendStep(bridgeContainer, "최종 PUT", bridge.put?.http_status ? `HTTP ${bridge.put.http_status} · ${bridge.put.label || ""}` : "대기", bridge.state === "complete" ? "complete" : bridge.state === "finishing_upload" ? "active" : failed ? "failed" : "");
-  appendStep(bridgeContainer, "공식 점수", current?.official?.published ? `${fmtNumber(current.official.score, 5)} · #${current.official.rank}` : "검증 대기", current?.official?.published ? "complete" : bridge.state === "complete" ? "active" : "");
+  const localReady = current?.local?.score !== null && current?.local?.score !== undefined;
+  appendStep(container, "쿼리 수신", fmtTime(current?.received_at), current?.received_at ? "complete" : "");
+  appendStep(container, "제출물 생성", safe.submission_rows ? `${safe.submission_rows}개 실험` : "대기", safe.submission_rows ? "complete" : current?.received_at ? "active" : "");
+  appendStep(container, "S3 업로드", safe.uploaded ? `${fmtTime(safe.uploaded_at)} · ${fmtDuration(safe.upload_elapsed_seconds)}` : "대기", safe.uploaded ? "complete" : safe.state === "failed" ? "failed" : current?.received_at ? "active" : "");
+  appendStep(container, "로컬 검증", localReady ? `${fmtNumber(current.local.score, 5)}점` : "대기", localReady ? "complete" : safe.uploaded ? "active" : "");
+  appendStep(container, "공식 점수", current?.official?.published ? `${fmtNumber(current.official.score, 5)} · #${current.official.rank}` : "검증 대기", current?.official?.published ? "complete" : safe.uploaded ? "active" : "");
 }
 
 function renderMetrics(miner) {
@@ -620,14 +610,29 @@ function renderMetrics(miner) {
     ? "미지 seed 홀드아웃 추정"
     : local.score_semantics === "provisional-seed-estimate"
       ? "잠정 seed 추정"
-      : local.source === "optimized_bridge"
-        ? "공식 seed 재현"
-        : local.source === "safe_submission"
+      : local.source === "safe_submission"
           ? "안전 제출"
           : "채점 대기";
   text("local-source", localSource);
+  const calibration = current.calibration || {};
+  text("calibrated-score", calibration.available ? fmtNumber(calibration.estimate, 6) : "—");
+  text(
+    "calibrated-range",
+    calibration.available
+      ? `P10–P90 ${fmtNumber(calibration.lower, 3)}–${fmtNumber(calibration.upper, 3)} · n=${calibration.records} · ${calibration.confidence === "high" ? "높음" : calibration.confidence === "moderate" ? "보통" : "낮음"}`
+      : calibration.reason === "insufficient-training-records"
+        ? `학습자료 ${calibration.records || 0}/${calibration.minimum_records || 8}`
+        : "과거 자료 학습 대기",
+  );
   text("official-score", official.published ? fmtNumber(official.score, 6) : "—");
-  text("official-rank", official.published ? `${official.participants}명 중 #${official.rank}` : "공식 검증 전");
+  text(
+    "official-rank",
+    official.published
+      ? official.reached_target
+        ? `${official.participants}명 중 #${official.rank} · 목표 달성`
+        : `${official.participants}명 중 #${official.rank} · 80위 컷까지 ${fmtSigned(official.gap_to_target, 3)}`
+      : "공식 검증 전",
+  );
   const comparison = miner.federation_comparison || {};
   text("score-delta", comparison.comparable ? fmtSigned(comparison.delta_to_top, 6) : "—");
   text("delta-source", comparison.comparable ? `${comparison.score_source === "official" ? "공식" : "로컬"} 점수 · ${comparison.participants}개 결과 중 #${comparison.rank}` : "동일 과제 비교 점수 대기");
@@ -636,7 +641,7 @@ function renderMetrics(miner) {
   text("weighted-score", fmtNumber(breakdown.total_weighted_score, 5));
   text("fidelity-score", fmtNumber(breakdown.distribution_fidelity_factor ?? breakdown.distribution_fidelity_score, 5));
   text("valid-experiments", breakdown.n_valid_experiments ?? local.valid_experiments ?? "—");
-  const sha = current.bridge?.submission_sha256 || current.safe?.submission_sha256;
+  const sha = current.safe?.submission_sha256;
   text("submission-sha", sha ? `${sha.slice(0, 10)}…${sha.slice(-8)}` : "—");
 }
 
@@ -666,7 +671,7 @@ function renderStreams(current) {
 
 function renderProcesses(miner) {
   const list = byId("process-list"); list.replaceChildren();
-  for (const role of ["miner", "bridge"]) {
+  for (const role of ["miner"]) {
     const process = miner.processes?.[role];
     const row = document.createElement("div"); row.className = "process-row";
     const left = document.createElement("div");
@@ -682,7 +687,7 @@ function renderProcesses(miner) {
 }
 
 function renderAlerts(miner) {
-  const alerts = [...(miner.alerts || [])];
+  const alerts = (miner.alerts || []).filter((alert) => !`${alert.code || ""} ${alert.title || ""}`.toLowerCase().includes("bridge"));
   const list = byId("alert-list"); list.replaceChildren();
   text("alert-count", String(alerts.length));
   if (!alerts.length) alerts.push({ severity: "ok", title: "현재 감지된 위험 없음", detail: "프로세스·설정·진행 상태가 정상 범위입니다." });
@@ -698,12 +703,12 @@ function renderHistory(history) {
   const body = byId("history-body"); body.replaceChildren();
   for (const item of history || []) {
     const row = document.createElement("tr");
-    const values = [fmtTime(item.received_at, true), item.task_id, item.safe_uploaded ? "완료" : "—", item.bridge_state || "—", item.seeds?.length ? `[${item.seeds.join(", ")}]` : "—", fmtNumber(item.local_score, 5), item.official_rank ? `${fmtNumber(item.official_score, 5)} · #${item.official_rank}` : "—"];
+    const values = [fmtTime(item.received_at, true), item.task_id, item.safe_uploaded ? "완료" : "—", fmtNumber(item.local_score, 5), item.official_rank ? `${fmtNumber(item.official_score, 5)} · #${item.official_rank}` : "—"];
     values.forEach((value, index) => appendCell(row, value, index === 1 ? "task-cell" : index === 2 && value === "완료" ? "positive" : ""));
     body.append(row);
   }
   if (!history?.length) {
-    const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 7; cell.className = "empty-cell"; cell.textContent = "아직 수신한 작업이 없습니다."; row.append(cell); body.append(row);
+    const row = document.createElement("tr"); const cell = document.createElement("td"); cell.colSpan = 5; cell.className = "empty-cell"; cell.textContent = "아직 수신한 작업이 없습니다."; row.append(cell); body.append(row);
   }
 }
 
@@ -713,7 +718,6 @@ function renderSelected(miner) {
   text("detail-profile", miner.profile);
   renderLanes(miner.current);
   renderMetrics(miner);
-  renderStreams(miner.current);
   renderProcesses(miner);
   renderAlerts(miner);
   renderHistory(miner.history);
@@ -721,8 +725,11 @@ function renderSelected(miner) {
 
 function maybeNotify(snapshot) {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
-  const critical = (snapshot.fleet?.alerts || []).find((item) => item.severity === "critical");
-  const published = (snapshot.miners || []).find((item) => item.current?.official?.published);
+  const critical = (snapshot.fleet?.alerts || []).find((item) => {
+    const signal = `${item.code || ""} ${item.title || ""}`.toLowerCase();
+    return item.severity === "critical" && ACTIVE_MINERS.has(shortMiner(item.miner)) && !signal.includes("bridge");
+  });
+  const published = (snapshot.miners || []).find((item) => ACTIVE_MINERS.has(item.label) && item.current?.official?.published);
   const key = critical ? `${critical.miner}:${critical.code}` : published ? `${published.id}:${published.current.task_id}:official:${published.current.official.rank}` : "";
   if (!key || key === lastNoticeKey) return;
   const title = critical ? `NIOME 경보 · ${critical.miner}` : `NIOME 공식 점수 · ${published.label}`;
@@ -734,14 +741,13 @@ function maybeNotify(snapshot) {
 function render(snapshot) {
   if (!snapshot) return;
   latestSnapshot = snapshot;
-  const miners = snapshot.miners || [];
-  if (!miners.some((item) => item.id === selectedMiner)) selectedMiner = miners[0]?.id || "bitcoin-hype-fleet:bitcoin1";
-  renderFleetHeader(snapshot);
-  renderRanking(snapshot.ranking || {});
-  renderSources(snapshot.sources || []);
-  text("miner-count-heading", `${miners.length}개 통합 마이너 상태`);
+  const miners = (snapshot.miners || []).filter((item) => ACTIVE_MINERS.has(item.label));
+  if (!miners.some((item) => item.id === selectedMiner)) selectedMiner = miners[0]?.id || "";
+  renderFleetHeader(snapshot, miners);
+  renderRanking(snapshot.ranking || {}, new Set(miners.map((item) => item.id)));
+  text("miner-count-heading", `${miners.length}개 활성 마이너 상태`);
   renderMinerCards(miners);
-  renderComparison(snapshot);
+  renderComparison({ ...snapshot, miners });
   const selected = miners.find((item) => item.id === selectedMiner);
   if (selected) renderSelected(selected);
   maybeNotify(snapshot);
@@ -784,8 +790,6 @@ byId("notify-button").addEventListener("click", async () => {
 
 if ("Notification" in window && Notification.permission === "granted") text("notify-button", "브라우저 알림 켜짐");
 fetchState();
-fetchResearch();
 connectEvents();
 setInterval(updateFreshness, 1000);
 setInterval(() => { if (!eventStreamLive) fetchState(); }, 15000);
-setInterval(fetchResearch, 5000);
