@@ -38,7 +38,7 @@ const allLanes = [
     bridge: "niome-seed-bridge-tao2",
     port: 8092,
     artifactRoot: path.join(root, "artifacts", "miners", "tao2"),
-    builderPolicy: "champion-reservoir001-cas55-v3",
+    builderPolicy: "champion-reservoir003-cas65-v3",
     explorationProfile:
       process.env.NIOME_TAO2_SS58 ||
       "5Ehx52VbhGyvmZVcvaRF2dG8JVJUMHHreRBLRsGMkJ695zih",

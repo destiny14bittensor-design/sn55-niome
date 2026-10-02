@@ -40,17 +40,21 @@ floors must still be preserved.
 4. Optimize the consistency/weighted-score product, not consistency alone.
 5. Reject candidates with invalid rows, timeout growth, fidelity collapse, or
    evidence of post-score/seed leakage.
-6. Require at least eight prospective observations for a policy-level model.
-7. Promote only after chronological holdout and prospective rounds improve the
-   probability of rank 30 without degrading submission reliability.
+6. A tao2 canary may rotate after a sealed pre-seed shadow, post-publication
+   exact replay, and independent synthetic holdout all agree. This gathers the
+   prospective official evidence that an undeployed shadow cannot provide.
+7. Require at least eight prospective observations before treating a canary as
+   a stable policy-level model. Stable promotion additionally requires
+   chronological holdout and prospective rounds to improve the probability of
+   rank 30 without degrading submission reliability.
 
 The next shadow-candidate search should therefore reject the old unrestricted
 `maximin-v1` shape: it reduced weighted score to `154.57` without producing a
 consistency gain. Candidate construction should instead explore a bounded
 energy/feature shell around the champion core, require a task-normalized
 weighted-score percentile floor, and rank candidates by consistency upside
-subject to that floor. No such candidate replaces the live `tao2` policy until
-the current reservoir canary has an official prospective result.
+subject to that floor. The first candidate rotation was held until the live
+reservoir canary produced the official prospective result recorded below.
 
 ## Current prospective shadow comparison
 
@@ -110,6 +114,30 @@ portfolio also had better P25 (`27.6437` versus `27.4282`), maximum (`29.3036`
 versus `29.1592`), and lower correlation with `tao1` (`0.2419` versus
 `0.3794`). Deterministic ordering affects finite-fold scores but did not
 generalize as an improvement, so no ordering salt is deployed.
+
+### First official prospective result and next canary
+
+The task published 248 official rows at `2026-10-02T12:56:43Z`. Rank 30 was
+`48.6829609181`. `tao1` scored `27.3709567546` at rank 129 and live `tao2`
+scored `26.4676756873` at rank 155. Both had 250 valid rows; the remaining gap
+was again consistency. At their observed weight and fidelity, the cutoff would
+have required consistency `15.3961` and `15.3520`, respectively, versus
+`8.6561` and `8.3465`.
+
+After upload and scoring were irrevocably complete, public seeds
+`757,873,965` enabled exact replay of the frozen shadows. `reservoir003` scored
+`27.3510884910` (estimated rank 130), while `reservoir005` scored
+`25.8273972458` (estimated rank 173). Their frozen SHAs remained
+`f46b2e2b...25886` and `1951b045...f282`. Thus `reservoir003` improved the
+live tao2 result by `0.8834` points and about 25 ranks on the same official
+seed, while its eight pre-publication synthetic ensembles had already beaten
+live tao2 8/8.
+
+This is sufficient to rotate the single experimental `tao2` canary from
+`champion-reservoir001-cas55-v3` to
+`champion-reservoir003-cas65-v3`; it is not sufficient to call the policy
+stable. `tao1` remains unchanged, and the new canary must accumulate the eight
+prospective official observations required by the stable-promotion gate.
 
 Two other shapes were rejected. `champion-hybrid20-cas65-v3` gained
 consistency but lost `4.33%` stress score and `8.54%` weighted score versus the

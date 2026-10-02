@@ -13,7 +13,7 @@
 - 마이너 포트 `8091..8094`, 대시보드 포트 `8111`
 - 정책 매핑:
   - tao1: `champion-v1` (control)
-  - tao2: `champion-reservoir001-cas55-v3`
+  - tao2: `champion-reservoir003-cas65-v3` (top-30 prospective canary)
   - won1: `champion-reservoir003-cas65-v3`
   - won2: `champion-reservoir005-v3`
 
