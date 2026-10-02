@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from functools import lru_cache
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -18,18 +17,7 @@ from typing import Any
 BASE_BLOCK_NUMBER = 8_843_300
 INTERVAL_BLOCKS = 720
 VALIDATION_OFFSET = 18
-
-def _configured_target_rank() -> int:
-    """Return the operator's ranking objective without making startup fragile."""
-
-    try:
-        value = int(os.getenv("NIOME_TARGET_RANK", "30"))
-    except ValueError:
-        return 30
-    return value if value > 0 else 30
-
-
-TARGET_RANK = _configured_target_rank()
+DEFAULT_TARGET_RANK = 30
 ACTIVE_BRIDGE_STATES = {
     "created",
     "opening",
@@ -134,7 +122,9 @@ def _received_at(task_dir: Path, status: dict[str, Any], task: dict[str, Any]) -
 def _official_summary(
     scoreboard: list[dict[str, Any]] | None,
     miner_hotkey: str,
+    target_rank: int = DEFAULT_TARGET_RANK,
 ) -> dict[str, Any]:
+    target_rank = max(1, int(target_rank))
     if not scoreboard:
         return {
             "published": False,
@@ -142,7 +132,7 @@ def _official_summary(
             "rank": None,
             "top_score": None,
             "gap_to_first": None,
-            "target_rank": TARGET_RANK,
+            "target_rank": target_rank,
             "target_score": None,
             "gap_to_target": None,
             "reached_target": False,
@@ -162,8 +152,8 @@ def _official_summary(
     )
     top_score = _number(ordered[0].get("final_score")) if ordered else None
     target_score = (
-        _number(ordered[TARGET_RANK - 1].get("final_score"))
-        if len(ordered) >= TARGET_RANK
+        _number(ordered[target_rank - 1].get("final_score"))
+        if len(ordered) >= target_rank
         else None
     )
     score = _number(mine.get("final_score")) if mine else None
@@ -174,14 +164,14 @@ def _official_summary(
         "rank": rank,
         "top_score": top_score,
         "gap_to_first": (score - top_score) if score is not None and top_score is not None else None,
-        "target_rank": TARGET_RANK,
+        "target_rank": target_rank,
         "target_score": target_score,
         "gap_to_target": (
             score - target_score
             if score is not None and target_score is not None
             else None
         ),
-        "reached_target": bool(rank is not None and rank <= TARGET_RANK),
+        "reached_target": bool(rank is not None and rank <= target_rank),
         "participants": len(ordered),
         "published_at": mine.get("created_at") if mine else None,
         "breakdown": dict(mine.get("breakdown") or {}) if mine else {},
@@ -489,6 +479,7 @@ def build_round_state(
     miner_hotkey: str,
     expected_config: dict[str, Any],
     loaded_config: dict[str, dict[str, Any]],
+    target_rank: int,
     now: datetime,
     bridge_enabled: bool = True,
 ) -> dict[str, Any]:
@@ -500,7 +491,7 @@ def build_round_state(
     safe_lane = _safe_lane(status)
     bridge_lane = _bridge_lane(bridge, failure, now, current_block)
     local = _local_summary(task_dir)
-    official = _official_summary(scoreboard, miner_hotkey)
+    official = _official_summary(scoreboard, miner_hotkey, target_rank)
     config = _config_summary(expected_config, loaded_config)
     alerts = _alerts(
         received_at,
@@ -552,13 +543,18 @@ def build_round_state(
     }
 
 
-def _history_summary(task_dir: Path, scoreboard: list[dict[str, Any]] | None, miner_hotkey: str) -> dict[str, Any]:
+def _history_summary(
+    task_dir: Path,
+    scoreboard: list[dict[str, Any]] | None,
+    miner_hotkey: str,
+    target_rank: int,
+) -> dict[str, Any]:
     status = safe_json(task_dir / "status.json") or {}
     task = safe_json(task_dir / "task.json") or {}
     bridge = safe_json(task_dir / "seed_bridge_status.json") or {}
     failure = safe_json(task_dir / "seed_bridge_failure.json") or {}
     local = _local_summary(task_dir)
-    official = _official_summary(scoreboard, miner_hotkey)
+    official = _official_summary(scoreboard, miner_hotkey, target_rank)
     return {
         "task_id": task_dir.name,
         "received_at": iso(_received_at(task_dir, status, task)),
@@ -583,6 +579,7 @@ def build_dashboard_snapshot(
     miner_hotkey: str = "",
     expected_config: dict[str, Any] | None = None,
     loaded_config: dict[str, dict[str, Any]] | None = None,
+    target_rank: int = DEFAULT_TARGET_RANK,
     now: datetime | None = None,
     bridge_enabled: bool = True,
 ) -> dict[str, Any]:
@@ -614,6 +611,7 @@ def build_dashboard_snapshot(
             miner_hotkey=miner_hotkey,
             expected_config=expected_config,
             loaded_config=loaded_config,
+            target_rank=target_rank,
             now=now,
             bridge_enabled=bridge_enabled,
         )
@@ -648,7 +646,12 @@ def build_dashboard_snapshot(
         current["prediction"] = prediction
 
     history = [
-        _history_summary(path, scoreboards.get(path.name), miner_hotkey)
+        _history_summary(
+            path,
+            scoreboards.get(path.name),
+            miner_hotkey,
+            target_rank,
+        )
         for _, path in task_dirs[:12]
     ]
     return {

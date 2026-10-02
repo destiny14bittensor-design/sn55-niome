@@ -175,6 +175,25 @@ def test_official_score_uses_top_30_target_by_default(tmp_path: Path):
     assert official["reached_target"] is False
 
 
+def test_official_target_rank_is_runtime_configurable(tmp_path: Path):
+    task = make_active_task(tmp_path)
+    scores = [
+        {"miner_hotkey": "leader", "final_score": 400.0, "breakdown": {}},
+        {"miner_hotkey": "target", "final_score": 300.0, "breakdown": {}},
+        {"miner_hotkey": HOTKEY, "final_score": 200.0, "breakdown": {}},
+    ]
+
+    current = build(
+        tmp_path,
+        scoreboards={task.name: scores},
+        target_rank=2,
+    )["current"]
+
+    assert current["official"]["target_rank"] == 2
+    assert current["official"]["target_score"] == 300.0
+    assert current["official"]["gap_to_target"] == -100.0
+
+
 def test_local_validation_cache_invalidates_when_artifact_changes(tmp_path: Path):
     task = make_active_task(tmp_path)
     validation = task / "seed_bridge_local_validation.json"

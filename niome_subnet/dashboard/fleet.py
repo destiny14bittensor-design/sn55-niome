@@ -315,6 +315,7 @@ class FleetDashboardCollector:
         expected_variants: int = 72,
         expected_primary_share: float = 0.60,
         calibration_model_path: Path | None = None,
+        target_rank: int = 80,
     ) -> None:
         self.lanes = tuple(lanes)
         self.score_url = score_url
@@ -324,6 +325,7 @@ class FleetDashboardCollector:
             "primary_cas_share": expected_primary_share,
         }
         self.calibration_model_path = calibration_model_path
+        self.target_rank = max(1, int(target_rank))
         self.processes: dict[str, dict[str, Any]] = {}
         self.loaded_config: dict[str, dict[str, Any]] = {}
         self.current_block: int | None = None
@@ -485,6 +487,7 @@ class FleetDashboardCollector:
                 },
                 loaded_config=role_config,
                 bridge_enabled=lane.bridge_process is not None,
+                target_rank=self.target_rank,
             )
             current = snapshot.get("current") or {}
             local = current.get("local") or {}

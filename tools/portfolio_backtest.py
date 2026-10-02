@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chronological public-task replay for the four honest builder policies.
+"""Chronological public-task replay for the locally owned builder policies.
 
 The builder sees a placeholder seed, exactly as it does before scoring.  Only
 after candidate selection is frozen is the published task seed used by the
@@ -36,9 +36,7 @@ from tools.local_validator.evaluator import evaluate_submission
 TASKS_URL = "https://niome-api.genomes.io/api/v3/tasks"
 SCORES_URL = "https://niome-api.genomes.io/api/v3/miners/scores"
 CELL_TYPES_URL = "https://niome-api.genomes.io/api/v3/data/cell-types?format=json"
-POLICY_ORDER = (
-    "champion-v1",
-    "champion-reservoir001-cas55-v3",
+DEFAULT_POLICY_ORDER = (
     "champion-reservoir003-cas65-v3",
     "champion-reservoir005-v3",
 )
@@ -173,7 +171,12 @@ def _split(index: int, count: int) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks", type=int, default=15)
-    parser.add_argument("--target-rank", type=int, default=80)
+    parser.add_argument("--target-rank", type=int, default=30)
+    parser.add_argument(
+        "--policies",
+        default=",".join(DEFAULT_POLICY_ORDER),
+        help="comma-separated built-in policies; defaults to the local won1/won2 pair",
+    )
     parser.add_argument(
         "--require-scores",
         action="store_true",
@@ -188,6 +191,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.tasks < 1:
         parser.error("--tasks must be positive")
+    policy_order = tuple(
+        value.strip() for value in args.policies.split(",") if value.strip()
+    )
+    if not policy_order:
+        parser.error("--policies must select at least one policy")
+    unknown_policies = sorted(set(policy_order) - set(BUILDER_POLICIES))
+    if unknown_policies:
+        parser.error(f"unknown policies: {', '.join(unknown_policies)}")
 
     session = requests.Session()
     tasks = _items(_get_json(session, TASKS_URL, page=1, per_page=args.tasks))
@@ -198,7 +209,7 @@ def main() -> int:
     chromosome, _ = read_first_fasta(args.chromosome)
 
     rounds = []
-    score_series = {policy_id: [] for policy_id in POLICY_ORDER}
+    score_series = {policy_id: [] for policy_id in policy_order}
     for index, task in enumerate(tasks):
         task_id = str(task["id"])
         content = task["content"]
@@ -223,7 +234,7 @@ def main() -> int:
         )
         policies = {}
         ids = {}
-        for policy_id in POLICY_ORDER:
+        for policy_id in policy_order:
             print(
                 f"building {index + 1}/{len(tasks)} {task_id} {policy_id}",
                 flush=True,
@@ -249,8 +260,8 @@ def main() -> int:
             ids[policy_id] = result_ids
             score_series[policy_id].append(replay_score)
         overlaps = []
-        for left_index, left in enumerate(POLICY_ORDER):
-            for right in POLICY_ORDER[left_index + 1 :]:
+        for left_index, left in enumerate(policy_order):
+            for right in policy_order[left_index + 1 :]:
                 overlaps.append(
                     {"left": left, "right": right, "jaccard": jaccard(ids[left], ids[right])}
                 )
@@ -277,8 +288,8 @@ def main() -> int:
         print(f"replayed {index + 1}/{len(tasks)} {task_id}", flush=True)
 
     correlations = []
-    for left_index, left in enumerate(POLICY_ORDER):
-        for right in POLICY_ORDER[left_index + 1 :]:
+    for left_index, left in enumerate(policy_order):
+        for right in policy_order[left_index + 1 :]:
             correlations.append(
                 {"left": left, "right": right, "correlation": pearson(score_series[left], score_series[right])}
             )
@@ -289,7 +300,7 @@ def main() -> int:
             for item in rounds
             for policy in item["policies"].values()
         ),
-        "best_of_four_target_three_of_final_four": (
+        "best_of_portfolio_target_three_of_final_four": (
             len(final_rounds) == 4
             and sum(item["any_target_rank_replay"] for item in final_rounds) >= 3
         ),
@@ -308,7 +319,7 @@ def main() -> int:
         "method": "unknown-seed build -> frozen stress selection -> published-seed replay",
         "split": "chronological 8 design / 3 selection / 4 final when 15 tasks are supplied",
         "task_count": len(tasks),
-        "policies": list(POLICY_ORDER),
+        "policies": list(policy_order),
         "gates": gates,
         "promotable": all(gates.values()),
         "correlations": correlations,

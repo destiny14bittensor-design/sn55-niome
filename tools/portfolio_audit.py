@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the four-lane canary/promotion evidence report."""
+"""Write the local won1/won2 canary/promotion evidence report."""
 
 from __future__ import annotations
 
@@ -16,14 +16,10 @@ from niome_subnet.miner.portfolio_audit import build_portfolio_report
 
 
 LANE_ROOTS = {
-    "tao1": ROOT / "artifacts" / "miners" / "tao1",
-    "tao2": ROOT / "artifacts" / "miners" / "tao2",
     "won1": ROOT / "artifacts" / "miners" / "won1",
     "won2": ROOT / "artifacts" / "miners" / "won2",
 }
 EXPECTED_POLICIES = {
-    "tao1": "champion-v1",
-    "tao2": "champion-reservoir001-cas55-v3",
     "won1": "champion-reservoir003-cas65-v3",
     "won2": "champion-reservoir005-v3",
 }

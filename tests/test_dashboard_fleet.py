@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from niome_subnet.dashboard.fleet import (
     build_fleet_state,
     scores_for_task,
 )
-from niome_subnet.dashboard.server import FLEET_LANES
+from niome_subnet.dashboard.server import FLEET_LANES, select_fleet_lanes
 
 
 def lane(number: int, profile: str = "baseline") -> MinerLaneConfig:
@@ -116,7 +117,7 @@ def test_different_task_is_not_compared_to_active_task() -> None:
 def test_offline_lane_raises_fleet_critical_alert() -> None:
     lanes = [lane(1), lane(2), lane(3, "exploration"), lane(4, "exploration")]
     processes = all_processes(lanes)
-    processes["bridge-4"] = process("bridge-4", status="stopped")
+    processes["miner-4"] = process("miner-4", status="stopped")
     state = build_fleet_state(
         lanes=lanes,
         lane_snapshots={},
@@ -132,13 +133,28 @@ def test_offline_lane_raises_fleet_critical_alert() -> None:
     assert dollar4["alerts"][0]["code"] == "lane_process_offline"
 
 
-def test_live_fleet_keeps_only_tao1_as_baseline() -> None:
+def test_seed_bridge_is_optional_for_honest_submission_health() -> None:
+    lanes = [replace(lane(1), bridge_process=None)]
+    processes = {"miner-1": process("miner-1")}
+    state = build_fleet_state(
+        lanes=lanes,
+        lane_snapshots={},
+        processes=processes,
+        current_block=None,
+        chain_source="unavailable",
+    )
+
+    assert state["fleet"]["online"] == 1
+    assert state["miners"][0]["online"] is True
+
+
+def test_live_fleet_has_one_control_per_host_pair() -> None:
     profiles = {item.lane_id: item.profile for item in FLEET_LANES}
 
     assert profiles == {
         "tao1": "baseline",
         "tao2": "exploration",
-        "won1": "exploration",
+        "won1": "baseline",
         "won2": "exploration",
     }
 
@@ -163,6 +179,12 @@ def test_live_fleet_does_not_require_seed_bridges() -> None:
         for alert in state["fleet"]["alerts"]
         if alert["code"] == "lane_process_offline"
     }
+
+
+def test_host_lane_selection_can_assign_only_won_miners() -> None:
+    selected = select_fleet_lanes("won1,won2")
+
+    assert [lane.lane_id for lane in selected] == ["won1", "won2"]
 
 
 def test_score_poll_uses_mature_current_task_without_validation_block() -> None:

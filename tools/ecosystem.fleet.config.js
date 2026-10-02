@@ -16,7 +16,7 @@ const validatorWalletPath =
   process.env.NIOME_SEED_VALIDATOR_WALLET_PATH ||
   "/home/administrator/.bittensor/wallets";
 
-const lanes = [
+const allLanes = [
   {
     id: "tao1",
     wallet: requiredEnv("NIOME_TAO1_WALLET"),
@@ -70,6 +70,27 @@ const lanes = [
       "5E6ttv44E9Ko8NAsYerT4atZummaYxYXGzkTNHNUgXmXEvb4",
   },
 ];
+
+const requestedLaneIds = (
+  process.env.NIOME_FLEET_LANES || "tao1,tao2,won1,won2"
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+const knownLaneIds = new Set(allLanes.map((lane) => lane.id));
+const unknownLaneIds = requestedLaneIds.filter((lane) => !knownLaneIds.has(lane));
+if (unknownLaneIds.length) {
+  throw new Error(`Unknown NIOME_FLEET_LANES: ${unknownLaneIds.join(",")}`);
+}
+if (!requestedLaneIds.length) {
+  throw new Error("NIOME_FLEET_LANES must select at least one lane");
+}
+const lanes = requestedLaneIds.map(
+  (laneId) => allLanes.find((lane) => lane.id === laneId),
+);
+const enableSeedBridges = process.env.NIOME_ENABLE_SEED_BRIDGES === "true";
+const enableLegacySeedResearch =
+  process.env.NIOME_ENABLE_LEGACY_SEED_RESEARCH === "true";
 
 const bridgeApps = lanes.map((lane) => ({
   name: lane.bridge,
@@ -137,8 +158,12 @@ const dashboard = {
     NIOME_TARGET_RANK: "30",
     NIOME_DASH_GUIDE_VARIANTS: "72",
     NIOME_DASH_PRIMARY_CAS_SHARE: "0.60",
+    NIOME_DASH_TARGET_RANK:
+      process.env.NIOME_DASH_TARGET_RANK || process.env.NIOME_TARGET_RANK || "30",
+    NIOME_FLEET_LANES: requestedLaneIds.join(","),
     NIOME_FEDERATION_LOCAL_ID: "tao-won-local",
-    NIOME_FEDERATION_LOCAL_LABEL: "Tao / Won Local",
+    NIOME_FEDERATION_LOCAL_LABEL:
+      process.env.NIOME_FEDERATION_LOCAL_LABEL || "Tao / Won Local",
     NIOME_FEDERATION_REMOTE_SOURCES: "[]",
     NIOME_SCORE_CALIBRATION_MODEL: scoreCalibrationModel,
     NIOME_SEED_RESEARCH_STATE: path.join(root, "artifacts", "research", "seed_research_state.json"),
@@ -320,8 +345,8 @@ module.exports = {
   apps: [
     ...minerApps,
     dashboard,
-    ...(process.env.NIOME_ENABLE_SEED_BRIDGES === "true" ? bridgeApps : []),
-    ...(process.env.NIOME_ENABLE_LEGACY_SEED_RESEARCH === "true"
+    ...(enableSeedBridges ? bridgeApps : []),
+    ...(enableLegacySeedResearch
       ? [
           seedProbeSupervisor,
           seedResearchOrchestrator,

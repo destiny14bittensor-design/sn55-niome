@@ -36,7 +36,7 @@ SCORE_CALIBRATION_MODEL = Path(
         str(REPO_ROOT / "artifacts" / "research" / "score_calibration.json"),
     )
 )
-FLEET_LANES = (
+ALL_FLEET_LANES = (
     MinerLaneConfig(
         lane_id="tao1",
         label="tao1",
@@ -72,7 +72,7 @@ FLEET_LANES = (
         miner_process="niome-won1",
         bridge_process=None,
         axon_port=8093,
-        profile="exploration",
+        profile="baseline",
         builder_policy="champion-reservoir003-cas65-v3",
         expected_primary_cas_share=0.65,
     ),
@@ -91,6 +91,30 @@ FLEET_LANES = (
     ),
 )
 
+
+def select_fleet_lanes(raw: str | None) -> tuple[MinerLaneConfig, ...]:
+    """Select this host's explicit lane ownership without changing shared code."""
+
+    available = {lane.lane_id: lane for lane in ALL_FLEET_LANES}
+    requested = [
+        item.strip()
+        for item in (raw or ",".join(available)).split(",")
+        if item.strip()
+    ]
+    unknown = sorted(set(requested) - set(available))
+    if unknown:
+        raise RuntimeError(f"unknown NIOME_FLEET_LANES: {', '.join(unknown)}")
+    if not requested:
+        raise RuntimeError("NIOME_FLEET_LANES must select at least one lane")
+    return tuple(available[lane_id] for lane_id in requested)
+
+
+FLEET_LANES = select_fleet_lanes(os.getenv("NIOME_FLEET_LANES"))
+TARGET_RANK = max(
+    1,
+    int(os.getenv("NIOME_DASH_TARGET_RANK", os.getenv("NIOME_TARGET_RANK", "30"))),
+)
+
 collector = FleetDashboardCollector(
     lanes=FLEET_LANES,
     score_url=f"{BASE_URL}/api/v3/miners/scores",
@@ -98,6 +122,7 @@ collector = FleetDashboardCollector(
     expected_variants=int(os.getenv("NIOME_DASH_GUIDE_VARIANTS", "72")),
     expected_primary_share=float(os.getenv("NIOME_DASH_PRIMARY_CAS_SHARE", "0.60")),
     calibration_model_path=SCORE_CALIBRATION_MODEL,
+    target_rank=TARGET_RANK,
 )
 federation = FederationCollector(
     local_collector=collector,
