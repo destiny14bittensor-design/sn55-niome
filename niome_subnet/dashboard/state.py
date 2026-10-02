@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from functools import lru_cache
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,18 @@ from typing import Any
 BASE_BLOCK_NUMBER = 8_843_300
 INTERVAL_BLOCKS = 720
 VALIDATION_OFFSET = 18
-TARGET_RANK = 80
+
+def _configured_target_rank() -> int:
+    """Return the operator's ranking objective without making startup fragile."""
+
+    try:
+        value = int(os.getenv("NIOME_TARGET_RANK", "30"))
+    except ValueError:
+        return 30
+    return value if value > 0 else 30
+
+
+TARGET_RANK = _configured_target_rank()
 ACTIVE_BRIDGE_STATES = {
     "created",
     "opening",

@@ -630,7 +630,7 @@ function renderMetrics(miner) {
     official.published
       ? official.reached_target
         ? `${official.participants}명 중 #${official.rank} · 목표 달성`
-        : `${official.participants}명 중 #${official.rank} · 80위 컷까지 ${fmtSigned(official.gap_to_target, 3)}`
+        : `${official.participants}명 중 #${official.rank} · ${official.target_rank}위 컷까지 ${fmtSigned(official.gap_to_target, 3)}`
       : "공식 검증 전",
   );
   const comparison = miner.federation_comparison || {};

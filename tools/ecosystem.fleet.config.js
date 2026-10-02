@@ -134,6 +134,7 @@ const dashboard = {
     NIOME_DASH_HOST: "0.0.0.0",
     NIOME_DASH_PORT: "8111",
     NIOME_DASH_NETWORK: "finney",
+    NIOME_TARGET_RANK: "30",
     NIOME_DASH_GUIDE_VARIANTS: "72",
     NIOME_DASH_PRIMARY_CAS_SHARE: "0.60",
     NIOME_FEDERATION_LOCAL_ID: "tao-won-local",

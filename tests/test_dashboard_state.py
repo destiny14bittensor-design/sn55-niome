@@ -150,6 +150,31 @@ def test_official_score_is_ranked_and_compared_to_local(tmp_path: Path):
     assert "score_mismatch" not in {alert["code"] for alert in current["alerts"]}
 
 
+def test_official_score_uses_top_30_target_by_default(tmp_path: Path):
+    task = make_active_task(tmp_path)
+    scores = [
+        {
+            "miner_hotkey": f"competitor-{index}",
+            "final_score": float(100 - index),
+            "breakdown": {},
+        }
+        for index in range(35)
+    ]
+    scores.append({
+        "miner_hotkey": HOTKEY,
+        "final_score": 60.0,
+        "created_at": "2026-09-24T20:00:00",
+        "breakdown": {},
+    })
+
+    official = build(tmp_path, scoreboards={task.name: scores})["current"]["official"]
+
+    assert official["target_rank"] == 30
+    assert official["target_score"] == 71.0
+    assert official["gap_to_target"] == -11.0
+    assert official["reached_target"] is False
+
+
 def test_local_validation_cache_invalidates_when_artifact_changes(tmp_path: Path):
     task = make_active_task(tmp_path)
     validation = task / "seed_bridge_local_validation.json"
