@@ -7,6 +7,7 @@ from niome_subnet.dashboard.fleet import (
     FleetDashboardCollector,
     MinerLaneConfig,
     build_fleet_state,
+    scores_for_task,
 )
 from niome_subnet.dashboard.server import FLEET_LANES
 
@@ -142,6 +143,28 @@ def test_live_fleet_keeps_only_tao1_as_baseline() -> None:
     }
 
 
+def test_live_fleet_does_not_require_seed_bridges() -> None:
+    assert all(item.bridge_process is None for item in FLEET_LANES)
+
+    processes = {
+        item.miner_process: process(item.miner_process) for item in FLEET_LANES
+    }
+    state = build_fleet_state(
+        lanes=FLEET_LANES,
+        lane_snapshots={},
+        processes=processes,
+        current_block=None,
+        chain_source="unavailable",
+    )
+
+    assert state["fleet"]["online"] == 4
+    assert not {
+        alert["code"]
+        for alert in state["fleet"]["alerts"]
+        if alert["code"] == "lane_process_offline"
+    }
+
+
 def test_score_poll_uses_mature_current_task_without_validation_block() -> None:
     collector = FleetDashboardCollector(
         lanes=[lane(1)], score_url="https://example.invalid/scores"
@@ -172,3 +195,13 @@ def test_score_poll_does_not_skip_first_history_item() -> None:
     }
 
     assert collector._next_score_task(1000.0) == "latest-history"
+
+
+def test_score_api_rows_are_filtered_locally_by_task_id() -> None:
+    rows = [
+        {"task_id": "current", "miner_hotkey": "a", "final_score": 10.0},
+        {"task_id": "older", "miner_hotkey": "a", "final_score": 99.0},
+        {"miner_hotkey": "a", "final_score": 88.0},
+    ]
+
+    assert scores_for_task(rows, "current") == [rows[0]]

@@ -23,6 +23,17 @@ from .state import build_dashboard_snapshot, parse_time, safe_json
 logger = logging.getLogger(__name__)
 
 
+def scores_for_task(
+    rows: Iterable[dict[str, Any]], task_id: str
+) -> list[dict[str, Any]]:
+    """Fail closed when the public API ignores its task_id query filter."""
+    return [
+        row
+        for row in rows
+        if str(row.get("task_id") or "") == str(task_id)
+    ]
+
+
 @dataclass(frozen=True)
 class MinerLaneConfig:
     lane_id: str
@@ -31,7 +42,7 @@ class MinerLaneConfig:
     hotkey: str
     artifact_root: Path
     miner_process: str
-    bridge_process: str
+    bridge_process: str | None
     axon_port: int
     profile: str
     builder_policy: str = "champion-v1"
@@ -47,6 +58,7 @@ def collect_fleet_pm2(
         name
         for lane in lanes
         for name in (lane.miner_process, lane.bridge_process)
+        if name
     }
     result = subprocess.run(
         ["pm2", "jlist"],
@@ -105,6 +117,8 @@ def _role_maps(
         (lane.miner_process, "niome-dollar1"),
         (lane.bridge_process, "niome-seed-bridge"),
     ):
+        if not actual:
+            continue
         if actual in processes:
             process_roles[canonical] = processes[actual]
         if actual in loaded:
@@ -167,12 +181,19 @@ def build_fleet_state(
         snapshot = lane_snapshots.get(lane.lane_id) or {}
         current = snapshot.get("current")
         miner_process = processes.get(lane.miner_process)
-        bridge_process = processes.get(lane.bridge_process)
+        bridge_process = (
+            processes.get(lane.bridge_process) if lane.bridge_process else None
+        )
         online = bool(
             miner_process
             and miner_process.get("status") == "online"
-            and bridge_process
-            and bridge_process.get("status") == "online"
+            and (
+                lane.bridge_process is None
+                or (
+                    bridge_process
+                    and bridge_process.get("status") == "online"
+                )
+            )
         )
         if online:
             online_count += 1
@@ -190,7 +211,11 @@ def build_fleet_state(
                     "severity": "critical",
                     "code": "lane_process_offline",
                     "title": "프로세스 오프라인",
-                    "detail": "miner 또는 seed bridge가 online 상태가 아닙니다.",
+                    "detail": (
+                        "miner가 online 상태가 아닙니다."
+                        if lane.bridge_process is None
+                        else "miner 또는 seed bridge가 online 상태가 아닙니다."
+                    ),
                 },
             )
         for alert in alerts:
@@ -459,6 +484,7 @@ class FleetDashboardCollector:
                     "primary_cas_share": lane.expected_primary_cas_share,
                 },
                 loaded_config=role_config,
+                bridge_enabled=lane.bridge_process is not None,
             )
             current = snapshot.get("current") or {}
             local = current.get("local") or {}
@@ -543,4 +569,5 @@ class FleetDashboardCollector:
             response.raise_for_status()
             payload = response.json()
         items = payload.get("items") if isinstance(payload, dict) else None
-        return [item for item in (items or []) if isinstance(item, dict)]
+        rows = [item for item in (items or []) if isinstance(item, dict)]
+        return scores_for_task(rows, task_id)

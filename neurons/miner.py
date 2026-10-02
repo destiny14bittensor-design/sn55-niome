@@ -30,6 +30,7 @@ from niome_subnet.miner import (
     persist_runtime_policy,
     persist_task_envelope,
     process_live_task,
+    task_is_complete,
 )
 from niome_subnet.protocol import GenomicsTaskSynapse
 
@@ -52,10 +53,17 @@ class Miner(BaseMinerNeuron):
         super(Miner, self).__init__(config=config)
         self.artifact_root = os.getenv("NIOME_ARTIFACT_ROOT", "artifacts/live")
         self.builder_policy = resolve_builder_policy()
+        self._active_task_ids: set[str] = set()
+        self._active_task_ids_lock = threading.Lock()
         persist_runtime_policy(
             artifact_root=self.artifact_root,
             builder_policy=self.builder_policy,
             axon_port=self.axon_port,
+            wallet_name=str(self.config.wallet),
+            hotkey_name=str(self.config.wallet_hotkey),
+            hotkey_ss58=self.wallet.hotkey.ss58_address,
+            netuid=int(self.config.netuid),
+            external_ip=str(self.config.axon.external_ip),
         )
         pending = pending_task_envelopes(self.artifact_root)
         if pending:
@@ -69,6 +77,8 @@ class Miner(BaseMinerNeuron):
 
     def _resume_pending_tasks(self, pending) -> None:
         for task, presigned_url, caller_hotkey in pending:
+            if not self._claim_task(task.id):
+                continue
             try:
                 process_live_task(
                     task=task,
@@ -80,6 +90,19 @@ class Miner(BaseMinerNeuron):
                 )
             except Exception as error:
                 logger.error("Recovered task %s failed: %s", task.id, error)
+            finally:
+                self._release_task(task.id)
+
+    def _claim_task(self, task_id: str) -> bool:
+        with self._active_task_ids_lock:
+            if task_id in self._active_task_ids:
+                return False
+            self._active_task_ids.add(task_id)
+            return True
+
+    def _release_task(self, task_id: str) -> None:
+        with self._active_task_ids_lock:
+            self._active_task_ids.discard(task_id)
 
     async def forward(self, body: bytes, caller_hotkey: str) -> dict:
         """
@@ -97,6 +120,12 @@ class Miner(BaseMinerNeuron):
             task_data = synapse.task.model_dump()
             logger.info(f"Received genomics task: {task_data}")
 
+            if task_is_complete(synapse.task.id, self.artifact_root):
+                logger.warning(
+                    "Ignoring duplicate completed task %s", synapse.task.id
+                )
+                return {}
+
             # Persist the upload credential before acknowledging the request.
             # A restart between the ACK and the worker's first instruction must
             # not turn a successfully delivered task into a missed round.
@@ -106,6 +135,10 @@ class Miner(BaseMinerNeuron):
                 caller_hotkey=caller_hotkey,
                 artifact_root=self.artifact_root,
             )
+
+            if not self._claim_task(synapse.task.id):
+                logger.warning("Ignoring duplicate active task %s", synapse.task.id)
+                return {}
 
             # Fire and forget - run process_task asynchronously without waiting
             asyncio.create_task(
@@ -139,6 +172,8 @@ class Miner(BaseMinerNeuron):
             )
         except Exception as error:
             logger.error("Task %s failed: %s", task.id, error)
+        finally:
+            self._release_task(task.id)
 
     def _generate_signature(self, answer_str: str, confidence: float) -> str:
         """Generate cryptographic signature for answer."""

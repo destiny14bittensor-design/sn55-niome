@@ -343,10 +343,14 @@ def _alerts(
     config: dict[str, Any],
     current_block: int | None,
     now: datetime,
+    bridge_enabled: bool,
 ) -> list[dict[str, str]]:
     alerts: list[dict[str, str]] = []
 
-    for name in ("niome-dollar1", "niome-seed-bridge"):
+    process_names = ["niome-dollar1"]
+    if bridge_enabled:
+        process_names.append("niome-seed-bridge")
+    for name in process_names:
         process = processes.get(name)
         if not process or process.get("status") != "online":
             alerts.append({
@@ -387,16 +391,16 @@ def _alerts(
         })
 
     bridge_state = bridge_lane["state"]
-    streams = bridge_lane["streams"]
+    streams = bridge_lane["streams"] if bridge_enabled else []
     live = [item for item in streams if item["state"] in {"opening", "streaming", "complete"}]
-    if bridge_state in ACTIVE_BRIDGE_STATES and streams and not live:
+    if bridge_enabled and bridge_state in ACTIVE_BRIDGE_STATES and streams and not live:
         alerts.append({
             "severity": "critical",
             "code": "all_streams_stopped",
             "title": "브리지 경로 전부 종료",
             "detail": "시드 기반 결과를 업로드할 생존 스트림이 없습니다.",
         })
-    elif bridge_state in ACTIVE_BRIDGE_STATES and len(live) == 1:
+    elif bridge_enabled and bridge_state in ACTIVE_BRIDGE_STATES and len(live) == 1:
         alerts.append({
             "severity": "warning",
             "code": "single_stream_remaining",
@@ -405,7 +409,7 @@ def _alerts(
         })
 
     observed_at = parse_time(bridge_lane.get("last_observed_at"))
-    if bridge_state in ACTIVE_BRIDGE_STATES and observed_at:
+    if bridge_enabled and bridge_state in ACTIVE_BRIDGE_STATES and observed_at:
         age = (now - observed_at).total_seconds()
         if age > 20:
             alerts.append({
@@ -415,7 +419,7 @@ def _alerts(
                 "detail": f"마지막 상태 갱신이 {age:.0f}초 전입니다.",
             })
 
-    if bridge_state == "failed" or bridge_lane.get("failure"):
+    if bridge_enabled and (bridge_state == "failed" or bridge_lane.get("failure")):
         failure = bridge_lane.get("failure") or {}
         alerts.append({
             "severity": "critical",
@@ -448,7 +452,8 @@ def _alerts(
 
     validation_block = bridge_lane.get("validation_block")
     if (
-        isinstance(validation_block, int)
+        bridge_enabled
+        and isinstance(validation_block, int)
         and current_block is not None
         and current_block > validation_block + 240
         and not official["published"]
@@ -473,6 +478,7 @@ def build_round_state(
     expected_config: dict[str, Any],
     loaded_config: dict[str, dict[str, Any]],
     now: datetime,
+    bridge_enabled: bool = True,
 ) -> dict[str, Any]:
     status = safe_json(task_dir / "status.json") or {}
     task = safe_json(task_dir / "task.json") or {}
@@ -494,15 +500,16 @@ def build_round_state(
         config,
         current_block,
         now,
+        bridge_enabled,
     )
 
     if official["published"]:
         stage = "official_published"
-    elif bridge_lane["state"] == "complete":
+    elif bridge_enabled and bridge_lane["state"] == "complete":
         stage = "waiting_official"
-    elif bridge_lane["state"] == "failed":
+    elif bridge_enabled and bridge_lane["state"] == "failed":
         stage = "bridge_failed"
-    elif bridge_lane["state"] in ACTIVE_BRIDGE_STATES:
+    elif bridge_enabled and bridge_lane["state"] in ACTIVE_BRIDGE_STATES:
         stage = bridge_lane["state"]
     elif safe_lane["uploaded"]:
         stage = "safe_uploaded"
@@ -565,6 +572,7 @@ def build_dashboard_snapshot(
     expected_config: dict[str, Any] | None = None,
     loaded_config: dict[str, dict[str, Any]] | None = None,
     now: datetime | None = None,
+    bridge_enabled: bool = True,
 ) -> dict[str, Any]:
     now = now or utc_now()
     processes = processes or {}
@@ -595,6 +603,7 @@ def build_dashboard_snapshot(
             expected_config=expected_config,
             loaded_config=loaded_config,
             now=now,
+            bridge_enabled=bridge_enabled,
         )
         prediction = {
             "available": False,

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import json
 import time
 
+import pytest
 import requests
 
 from niome_subnet.genomics.submission_builder import build_submission
@@ -11,7 +12,9 @@ from niome_subnet.miner.task_processor import (
     _score_candidates_until_deadline,
     _upload_with_deadline,
     pending_task_envelopes,
+    persist_submission_commitment,
     persist_task_envelope,
+    task_is_complete,
 )
 from niome_subnet.genomics.model import Task
 from niome_subnet.utils.seeds import seed_blocks, seeds_from_block_hashes
@@ -121,6 +124,42 @@ def test_same_task_id_is_isolated_between_miner_roots(tmp_path):
     ]
 
 
+def test_completed_task_is_not_eligible_for_duplicate_submission(tmp_path):
+    task_root = tmp_path / "task-a"
+    task_root.mkdir()
+    (task_root / "status.json").write_text('{"state":"complete"}\n')
+
+    assert task_is_complete("task-a", tmp_path) is True
+    assert task_is_complete("task-b", tmp_path) is False
+
+
+def test_submission_commitment_is_write_once_and_restart_idempotent(tmp_path):
+    path = tmp_path / "submission_commitment.json"
+    commitment = {
+        "schema_version": 1,
+        "committed_at": "2026-10-02T00:00:00+00:00",
+        "task_id": "task-a",
+        "builder_policy": {"policy_id": "champion-v1"},
+        "selection_profile": "ranked",
+        "selected_candidate": "balanced-full",
+        "submission_sha256": "a" * 64,
+        "submission_rows": 250,
+        "selection_seed_source": "deterministic-stress",
+        "current_round_label_consumed": False,
+        "post_score_overwrite": False,
+    }
+
+    persist_submission_commitment(path, commitment)
+    persist_submission_commitment(
+        path, commitment | {"committed_at": "2026-10-02T00:01:00+00:00"}
+    )
+    assert json.loads(path.read_text()) == commitment
+
+    changed = commitment | {"submission_sha256": "b" * 64}
+    with pytest.raises(RuntimeError, match="immutable submission commitment"):
+        persist_submission_commitment(path, changed)
+
+
 def test_builder_returns_immediate_valid_fallback_when_deadline_passed():
     contract = {
         "active_mutations": ["mutation-a"],
@@ -190,6 +229,8 @@ def test_candidate_variants_keep_full_baseline_as_fallback():
 
 
 def test_scoring_does_not_start_after_deadline():
+    # Stage-4's public-compatible 3 x 5 x 200-tree fixture takes roughly 29s
+    # on the production host; this test covers completion, not machine speed.
     results, deadline_reached = _score_candidates_until_deadline(
         [("baseline", [])],
         {},
@@ -227,7 +268,7 @@ def test_scoring_worker_returns_result_before_deadline(tmp_path):
             "chromosome_11_path": str(chromosome_path),
             "cell_types_path": str(cell_types_path),
         },
-        deadline_monotonic=time.monotonic() + 20,
+        deadline_monotonic=time.monotonic() + 45,
     )
 
     assert deadline_reached is False

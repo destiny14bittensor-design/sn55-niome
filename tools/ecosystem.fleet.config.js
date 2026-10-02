@@ -2,9 +2,16 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const python = path.join(root, ".venv", "bin", "python");
-const externalIp = process.env.NIOME_EXTERNAL_IP || "69.30.204.53";
-const walletPath =
-  process.env.NIOME_WALLET_PATH || "/home/administrator/.bittensor/wallets/main";
+const requiredEnv = (name) => {
+  const value = (process.env[name] || "").trim();
+  if (!value) {
+    throw new Error(`Missing required environment variable ${name}`);
+  }
+  return value;
+};
+const externalIp = requiredEnv("NIOME_EXTERNAL_IP");
+const walletPath = requiredEnv("NIOME_WALLET_PATH");
+const scoreCalibrationModel = requiredEnv("NIOME_SCORE_CALIBRATION_MODEL");
 const validatorWalletPath =
   process.env.NIOME_SEED_VALIDATOR_WALLET_PATH ||
   "/home/administrator/.bittensor/wallets";
@@ -12,8 +19,8 @@ const validatorWalletPath =
 const lanes = [
   {
     id: "tao1",
-    wallet: process.env.NIOME_TAO1_WALLET || "main1",
-    hotkey: process.env.NIOME_TAO1_HOTKEY || "tao1",
+    wallet: requiredEnv("NIOME_TAO1_WALLET"),
+    hotkey: requiredEnv("NIOME_TAO1_HOTKEY"),
     miner: "niome-tao1",
     bridge: "niome-seed-bridge-tao1",
     port: 8091,
@@ -25,8 +32,8 @@ const lanes = [
   },
   {
     id: "tao2",
-    wallet: process.env.NIOME_TAO2_WALLET || "main1",
-    hotkey: process.env.NIOME_TAO2_HOTKEY || "tao2",
+    wallet: requiredEnv("NIOME_TAO2_WALLET"),
+    hotkey: requiredEnv("NIOME_TAO2_HOTKEY"),
     miner: "niome-tao2",
     bridge: "niome-seed-bridge-tao2",
     port: 8092,
@@ -38,8 +45,8 @@ const lanes = [
   },
   {
     id: "won1",
-    wallet: process.env.NIOME_WON1_WALLET || "main2",
-    hotkey: process.env.NIOME_WON1_HOTKEY || "won1",
+    wallet: requiredEnv("NIOME_WON1_WALLET"),
+    hotkey: requiredEnv("NIOME_WON1_HOTKEY"),
     miner: "niome-won1",
     bridge: "niome-seed-bridge-won1",
     port: 8093,
@@ -51,8 +58,8 @@ const lanes = [
   },
   {
     id: "won2",
-    wallet: process.env.NIOME_WON2_WALLET || "main2",
-    hotkey: process.env.NIOME_WON2_HOTKEY || "won2",
+    wallet: requiredEnv("NIOME_WON2_WALLET"),
+    hotkey: requiredEnv("NIOME_WON2_HOTKEY"),
     miner: "niome-won2",
     bridge: "niome-seed-bridge-won2",
     port: 8094,
@@ -132,6 +139,7 @@ const dashboard = {
     NIOME_FEDERATION_LOCAL_ID: "tao-won-local",
     NIOME_FEDERATION_LOCAL_LABEL: "Tao / Won Local",
     NIOME_FEDERATION_REMOTE_SOURCES: "[]",
+    NIOME_SCORE_CALIBRATION_MODEL: scoreCalibrationModel,
     NIOME_SEED_RESEARCH_STATE: path.join(root, "artifacts", "research", "seed_research_state.json"),
   },
 };
@@ -236,7 +244,7 @@ const seedResearchOrchestrator = {
     "--mt-rank-audit-report artifacts/research/preseed_mt19937_rank_audit.json",
     "--early-score-root artifacts/research/early_score_rounds",
     "--early-score-supervisor-state artifacts/research/early_score_supervisor.json",
-    "--signal-root artifacts/miners/dollar4",
+    `--signal-root ${path.join(root, "artifacts", "miners", "won2")}`,
     "--poll-interval 10",
     "--max-pages 3",
   ].join(" "),
@@ -309,13 +317,17 @@ const preseedShuffleSupervisor = {
 
 module.exports = {
   apps: [
-    ...bridgeApps,
     ...minerApps,
     dashboard,
-    seedProbeSupervisor,
-    seedResearchOrchestrator,
-    publicChainEntropyCollector,
-    preseedGeneratorSupervisor,
-    preseedShuffleSupervisor,
+    ...(process.env.NIOME_ENABLE_SEED_BRIDGES === "true" ? bridgeApps : []),
+    ...(process.env.NIOME_ENABLE_LEGACY_SEED_RESEARCH === "true"
+      ? [
+          seedProbeSupervisor,
+          seedResearchOrchestrator,
+          publicChainEntropyCollector,
+          preseedGeneratorSupervisor,
+          preseedShuffleSupervisor,
+        ]
+      : []),
   ],
 };

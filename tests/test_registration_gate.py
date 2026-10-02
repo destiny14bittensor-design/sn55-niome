@@ -1,34 +1,37 @@
-from dataclasses import dataclass
-
-from niome_subnet.miner.registration_gate import audit_registration
+from niome_subnet.miner.registration_gate import MinerIdentity, evaluate_registration
 
 
-@dataclass
-class Neuron:
-    hotkey: str
-    uid: int
-    active: bool
-    last_update: int
-
-
-def test_registration_gate_requires_every_target_hotkey():
-    targets = {"one": "hk1", "two": "hk2"}
-    report = audit_registration(
-        [Neuron("hk1", 7, True, 100)],
-        targets,
+def test_registration_gate_holds_if_any_hotkey_is_missing():
+    identities = [
+        MinerIdentity("a", "wallet", "one", 8091, "/a"),
+        MinerIdentity("b", "wallet", "two", 8092, "/b"),
+    ]
+    report = evaluate_registration(
+        identities,
+        {("wallet", "one"): "addr-one", ("wallet", "two"): "addr-two"},
+        {"addr-one": 7},
+        network="finney",
+        netuid=55,
     )
+    assert report["all_registered"] is False
+    assert report["deployment_decision"] == "HOLD"
+    assert report["miners"][1]["registered"] is False
+    assert report["chain_write"] is False
 
-    assert report["ready"] is False
-    assert report["registered"] == 1
-    assert report["lanes"][0]["uid"] == 7
-    assert report["lanes"][1]["uid"] is None
 
-
-def test_registration_gate_passes_when_all_hotkeys_exist():
-    report = audit_registration(
-        [Neuron("hk1", 7, True, 100), Neuron("hk2", 9, False, 101)],
-        {"one": "hk1", "two": "hk2"},
+def test_registration_gate_reports_local_identity_and_chain_uid():
+    identity = MinerIdentity("tao1", "main1", "tao1", 8091, "/miners/tao1")
+    report = evaluate_registration(
+        [identity],
+        {("main1", "tao1"): "addr-tao1"},
+        {"addr-tao1": 42},
+        network="finney",
+        netuid=55,
     )
-
-    assert report["ready"] is True
-    assert report["registered"] == 2
+    row = report["miners"][0]
+    assert report["all_registered"] is True
+    assert report["deployment_decision"] == "PASS"
+    assert row["wallet"] == "main1"
+    assert row["hotkey"] == "tao1"
+    assert row["hotkey_ss58"] == "addr-tao1"
+    assert row["uid"] == 42
