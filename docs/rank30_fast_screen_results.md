@@ -55,3 +55,15 @@ only `20.74` and `20.48` final points. They were rejected.
 
 No candidate passed the canary gate, so neither live miner policy was changed.
 won1 remains the control and won2 remains on `champion-reservoir005-v3`.
+
+## Frozen live-payload audit
+
+The actual latest won1 and won2 payloads were then evaluated on three paired,
+independent synthetic seed triples without using the task's published score or
+seed. won1's score range was `25.3266-29.9992` with median `26.2209`; won2's
+range was `25.1985-28.6606` with median `26.5528`. won1 won two ensembles and
+won2 won one. Payload Jaccard was `0.4409`, but score correlation was `0.9765`.
+
+The lanes therefore contain materially different experiment identities but
+still react similarly to task/seed difficulty. There is no evidence from this
+audit that changing the live policies would improve the rank-30 probability.
