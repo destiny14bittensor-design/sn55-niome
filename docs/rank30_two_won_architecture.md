@@ -21,6 +21,13 @@ observed cutoff requires consistency near `0.11575`, versus the observed
 `0.08531`: a relative lift of about 35.7%. A 3% safety margin requires roughly
 `0.11925`. Small near-tie diversification alone is therefore insufficient.
 
+That round was easier than the recent norm. A public audit of 30 completed
+tasks found 29 usable rank-30 cutoffs ranging from `17.5710` to `78.9870`,
+with median `54.2260`, P75 `59.7998`, and P90 `63.7267`. At won1's current
+weighted score and fidelity, those median and P75 cutoffs correspond to
+consistency near `0.165` and `0.182`. The single-round `0.11925` value is a
+near-term minimum, not a durable promotion target.
+
 ## Two-lane roles
 
 - `won1` is the control. Preserve the best validated champion-family policy
@@ -47,9 +54,11 @@ honest first-submission path.
    near-frontier guide identities, bucket allocations, and deterministic
    tie-breaking.
 4. **Optimize the multiplicative bottleneck.** Preserve weighted score above
-   `360` and fidelity above `0.88`, then seek consistency median above `0.116`
-   and p10 above `0.10`. Reject improvements created only by sacrificing one
-   of the other factors.
+   `360` and fidelity above `0.88`. Derive required consistency separately for
+   every replay task from that task's official rank-30 cutoff. Use `0.165` as
+   the current median-cutoff research threshold and `0.182` as the P75 stress
+   threshold, rather than treating the latest round's `0.116` as sufficient.
+   Reject improvements created only by sacrificing one of the other factors.
 5. **Chronological public-task replay.** Freeze parameters on design rounds,
    choose once on selection rounds, and report rank-30 performance only on the
    final suffix. Do not reuse a consumed suffix as a new holdout.
@@ -63,7 +72,11 @@ A won2 policy is promotable only when all gates pass:
 
 - 250 valid experiments and no upload/deadline regression;
 - weighted score `>= 360` and fidelity `>= 0.88` on every final replay;
-- holdout consistency median `>= 0.116` and p10 `>= 0.10`;
+- rank-30 cutoff reached on at least three of the four untouched final replay
+  tasks, with the factor shortfall reported for every miss;
+- holdout consistency reaches the dynamically derived same-task requirement;
+  the present cross-task reference levels are `0.165` (median) and `0.182`
+  (P75), not hard protocol constants;
 - payload differs materially from won1 without exceeding the structural-loss
   budget;
 - at least three paired prospective official tasks;
