@@ -9,8 +9,10 @@ it never writes a submission or uses validator credentials.
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import statistics
 import sys
@@ -134,6 +136,151 @@ def task_report(
     }
 
 
+def persistent_cohort_summary(
+    task_rows: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+    *,
+    target_rank: int,
+) -> dict[str, Any]:
+    history: dict[str, list[dict[str, float]]] = defaultdict(list)
+    for _, rows in task_rows:
+        ordered = sorted(
+            rows,
+            key=lambda row: float(row.get("final_score") or 0.0),
+            reverse=True,
+        )
+        task_components = {
+            "weighted": [
+                float((row.get("breakdown") or {}).get("total_weighted_score") or 0.0)
+                for row in ordered
+            ],
+            "fidelity": [
+                float((row.get("breakdown") or {}).get("distribution_fidelity_factor") or 0.0)
+                for row in ordered
+            ],
+            "consistency": [
+                float((row.get("breakdown") or {}).get("consistency_score") or 0.0)
+                for row in ordered
+            ],
+        }
+        for rank, row in enumerate(ordered, 1):
+            hotkey = str(row.get("miner_hotkey") or "")
+            if not hotkey:
+                continue
+            breakdown = row.get("breakdown") or {}
+            observation = {
+                "rank": float(rank),
+                "weighted": float(breakdown.get("total_weighted_score") or 0.0),
+                "fidelity": float(
+                    breakdown.get("distribution_fidelity_factor") or 0.0
+                ),
+                "consistency": float(breakdown.get("consistency_score") or 0.0),
+            }
+            for component in ("weighted", "fidelity", "consistency"):
+                values = task_components[component]
+                observation[f"{component}_percentile"] = (
+                    sum(value <= observation[component] for value in values)
+                    / len(values)
+                    if values
+                    else 0.0
+                )
+            history[hotkey].append(observation)
+
+    minimum_rounds = max(1, math.ceil(len(task_rows) * 2.0 / 3.0))
+    persistent = [observations for observations in history.values() if len(observations) >= minimum_rounds]
+    profiles = []
+    qualifying_observations: list[dict[str, float]] = []
+    for observations in persistent:
+        top_target_rate = sum(
+            item["rank"] <= target_rank for item in observations
+        ) / len(observations)
+        if top_target_rate < 0.25:
+            continue
+        qualifying_observations.extend(observations)
+        profiles.append(
+            {
+                "rounds": len(observations),
+                "top_target_rate": top_target_rate,
+                "median_rank": statistics.median(item["rank"] for item in observations),
+                "median_weighted": statistics.median(
+                    item["weighted"] for item in observations
+                ),
+                "median_fidelity": statistics.median(
+                    item["fidelity"] for item in observations
+                ),
+                "median_consistency": statistics.median(
+                    item["consistency"] for item in observations
+                ),
+                "median_weighted_percentile": statistics.median(
+                    item["weighted_percentile"] for item in observations
+                ),
+                "median_fidelity_percentile": statistics.median(
+                    item["fidelity_percentile"] for item in observations
+                ),
+                "median_consistency_percentile": statistics.median(
+                    item["consistency_percentile"] for item in observations
+                ),
+            }
+        )
+    profiles.sort(key=lambda item: (-item["top_target_rate"], item["median_rank"]))
+
+    def median_field(field: str) -> float | None:
+        values = [float(item[field]) for item in profiles]
+        return statistics.median(values) if values else None
+
+    def outcome_summary(success: bool) -> dict[str, Any]:
+        selected = [
+            item
+            for item in qualifying_observations
+            if (item["rank"] <= target_rank) is success
+        ]
+        return {
+            "observations": len(selected),
+            "median_rank": (
+                statistics.median(item["rank"] for item in selected)
+                if selected
+                else None
+            ),
+            "median_weighted_percentile": (
+                statistics.median(item["weighted_percentile"] for item in selected)
+                if selected
+                else None
+            ),
+            "median_fidelity_percentile": (
+                statistics.median(item["fidelity_percentile"] for item in selected)
+                if selected
+                else None
+            ),
+            "median_consistency_percentile": (
+                statistics.median(item["consistency_percentile"] for item in selected)
+                if selected
+                else None
+            ),
+        }
+
+    return {
+        "minimum_rounds": minimum_rounds,
+        "persistent_hotkeys": len(persistent),
+        "qualifying_cohort_size": len(profiles),
+        "cohort_medians": {
+            "top_target_rate": median_field("top_target_rate"),
+            "rank": median_field("median_rank"),
+            "weighted": median_field("median_weighted"),
+            "fidelity": median_field("median_fidelity"),
+            "consistency": median_field("median_consistency"),
+            "weighted_percentile": median_field("median_weighted_percentile"),
+            "fidelity_percentile": median_field("median_fidelity_percentile"),
+            "consistency_percentile": median_field(
+                "median_consistency_percentile"
+            ),
+        },
+        "conditional_outcomes": {
+            "target_reached": outcome_summary(True),
+            "target_missed": outcome_summary(False),
+        },
+        "anonymized_profiles": profiles,
+    }
+
+
 def build_report(
     task_rows: list[tuple[dict[str, Any], list[dict[str, Any]]]],
     *,
@@ -155,6 +302,9 @@ def build_report(
         "mode": "public-read-only-rank-gap-audit",
         "target_rank": target_rank,
         "rounds": rounds,
+        "persistent_top_target_cohort": persistent_cohort_summary(
+            task_rows, target_rank=target_rank
+        ),
         "cutoff_distribution": {
             "rounds": len(cutoffs),
             "minimum": min(cutoffs) if cutoffs else None,

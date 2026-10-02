@@ -24,6 +24,14 @@ cutoff ranged from `17.5710` to `78.9870`, with median `54.2260`, P75
 `59.7998`, and P90 `63.7267`. A fixed raw-score target is therefore secondary;
 promotion is decided directly by rank-30 success on chronological tasks.
 
+Among 249 hotkeys present in at least 20 of those rounds, only 12 reached rank
+30 in at least 25% of their observations. Their successful observations had a
+median consistency percentile of `0.9395`, versus `0.4637` when they missed the
+target. Weighted-score percentile moved from `0.6452` to `0.7258`, while
+fidelity moved only from `0.5927` to `0.6371`. This makes a consistency spike
+the strongest observed separator, while confirming that weight and fidelity
+floors must still be preserved.
+
 ## Research and promotion gate
 
 1. Keep `tao1` unchanged as the paired control.
@@ -35,6 +43,14 @@ promotion is decided directly by rank-30 success on chronological tasks.
 6. Require at least eight prospective observations for a policy-level model.
 7. Promote only after chronological holdout and prospective rounds improve the
    probability of rank 30 without degrading submission reliability.
+
+The next shadow-candidate search should therefore reject the old unrestricted
+`maximin-v1` shape: it reduced weighted score to `154.57` without producing a
+consistency gain. Candidate construction should instead explore a bounded
+energy/feature shell around the champion core, require a task-normalized
+weighted-score percentile floor, and rank candidates by consistency upside
+subject to that floor. No such candidate replaces the live `tao2` policy until
+the current reservoir canary has an official prospective result.
 
 Run the public, credential-free audit with:
 

@@ -34,5 +34,10 @@ def test_build_report_tracks_target_cutoff_and_required_consistency():
     ] == 71.0 / 3.6
     assert current["miners"]["missing"] == {"published": False}
     assert report["cutoff_distribution"]["median"] == 71.0
+    assert report["persistent_top_target_cohort"]["minimum_rounds"] == 1
+    assert report["persistent_top_target_cohort"]["qualifying_cohort_size"] == 30
+    assert report["persistent_top_target_cohort"]["conditional_outcomes"][
+        "target_reached"
+    ]["observations"] == 30
     assert report["safety"]["uses_credentials"] is False
     assert report["safety"]["uses_current_score_for_current_submission"] is False
