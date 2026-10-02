@@ -82,6 +82,18 @@ def paired_summary(
     }
 
 
+def best_of_pair_summary(
+    left: list[dict[str, Any]], right: list[dict[str, Any]]
+) -> dict[str, Any]:
+    if len(left) != len(right):
+        raise ValueError("paired observations must have equal length")
+    best = [
+        max((left_item, right_item), key=lambda item: float(item["score"]))
+        for left_item, right_item in zip(left, right)
+    ]
+    return submission_summary(best)
+
+
 def _json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -188,6 +200,9 @@ def main() -> int:
                     "right": right,
                     "payload_jaccard": jaccard(identities[left], identities[right]),
                     **paired_summary(observations[left], observations[right]),
+                    "best_of_pair": best_of_pair_summary(
+                        observations[left], observations[right]
+                    ),
                 }
             )
     report = {

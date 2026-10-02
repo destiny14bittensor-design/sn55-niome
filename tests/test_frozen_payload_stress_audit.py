@@ -1,6 +1,7 @@
 import pytest
 
 from tools.frozen_payload_stress_audit import (
+    best_of_pair_summary,
     paired_summary,
     parse_submission,
     percentile,
@@ -45,6 +46,23 @@ def test_paired_summary_uses_right_minus_left_direction():
     assert result["ties"] == 1
     assert result["right_win_rate"] == pytest.approx(1 / 3)
     assert result["right_minus_left_median"] == 0.0
+
+
+def test_best_of_pair_summary_measures_portfolio_tail():
+    left = [
+        {"score": 1.0, "consistency": 2.0, "invalid_experiments": 0},
+        {"score": 5.0, "consistency": 6.0, "invalid_experiments": 0},
+    ]
+    right = [
+        {"score": 3.0, "consistency": 4.0, "invalid_experiments": 0},
+        {"score": 4.0, "consistency": 5.0, "invalid_experiments": 0},
+    ]
+
+    result = best_of_pair_summary(left, right)
+
+    assert result["score_minimum"] == 3.0
+    assert result["score_median"] == 4.0
+    assert result["consistency_median"] == 5.0
 
 
 def test_parse_submission_requires_label_and_path():

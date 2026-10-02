@@ -83,6 +83,17 @@ with `tao1` was `0.7807`, slightly above the `0.75` independence ceiling, and
 the absolute score uplift remains far smaller than the observed rank-30 gap.
 The audit used neither the current official seed nor current official score.
 
+The same eight paired ensembles show a real stability-versus-diversification
+trade-off at tolerance `0.005`. `reservoir005` had a lower individual median
+(`26.1859`) than `reservoir003` (`26.7453`), and their direct paired result was
+4-4 with a median delta of `-0.1485` for `005`. However, `005` correlated only
+`0.7062` with `tao1`, below the `0.75` ceiling. The `tao1+reservoir005`
+best-of-two portfolio had P25 `25.6670`, minimum `24.6432`, and maximum
+`29.3036`, versus `25.6010`, `24.0001`, and `28.2094` for
+`tao1+reservoir003`. Thus `003` remains the stable single-canary leader while
+`005` is the stronger tail-diversification hypothesis. Neither is promoted
+before the current official result and additional prospective observations.
+
 Two other shapes were rejected. `champion-hybrid20-cas65-v3` gained
 consistency but lost `4.33%` stress score and `8.54%` weighted score versus the
 live canary. The experimental `champion-caslearn10-cas55-v4` lost `8.19%`
