@@ -82,7 +82,11 @@ its stress score and consistency both trail the live canary.
 `tools/portfolio_backtest.py --reference-submission PATH` now hashes a frozen
 control payload and applies the existing Jaccard promotion gate between that
 payload and every candidate. This prevents a seemingly diverse set of shadow
-policies from passing while all of them still duplicate the control lane.
+policies from passing while all of them still duplicate the control lane. A
+single frozen control is task-specific, so this option requires `--tasks 1`.
+The report keeps deterministic stress selection separate from published-seed
+replay: a placeholder seed of `0` never receives an official-replay label or
+an estimated public rank.
 
 Run the public, credential-free audit with:
 

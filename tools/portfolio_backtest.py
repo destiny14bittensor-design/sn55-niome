@@ -22,7 +22,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from niome_subnet.genomics.builder_policy import BUILDER_POLICIES
-from niome_subnet.genomics.seed_policy import deterministic_stress_seeds
+from niome_subnet.genomics.seed_policy import (
+    deterministic_stress_seeds,
+    parse_seed_values,
+)
 from niome_subnet.genomics.submission_builder import build_submission
 from niome_subnet.miner.portfolio_audit import jaccard, pearson
 from niome_subnet.miner.task_processor import (
@@ -70,6 +73,7 @@ def _candidate_result(index: int, label: str, rows, result) -> dict[str, Any]:
         "index": index,
         "label": label,
         "rows": len(rows),
+        "invalid_experiments": len(result.invalid_experiments),
         "final_score": result.final_score,
         "per_seed_final_scores": [
             float(item["stage5"]["final_score"]) for item in result.per_seed
@@ -130,10 +134,20 @@ def replay_policy(
         candidate_scores.append(_candidate_result(index, label, rows, result))
     selected_index = _select_candidate_index(candidate_scores, policy)
     selected_label, selected = candidates[selected_index]
-    official_artifacts = _artifact_bundle(
-        contract, reference, chromosome, cell_types
+    try:
+        published_seeds = parse_seed_values(contract.get("seed"))
+    except (TypeError, ValueError):
+        published_seeds = []
+    published_seed_available = bool(
+        published_seeds and published_seeds != [0]
     )
-    official = evaluate_submission(selected, official_artifacts)
+    published = None
+    if published_seed_available:
+        published_artifacts = _artifact_bundle(
+            contract, reference, chromosome, cell_types
+        )
+        published = evaluate_submission(selected, published_artifacts)
+    selection_result = candidate_scores[selected_index]
     raw = json.dumps(selected, separators=(",", ":")).encode()
     return (
         {
@@ -142,9 +156,20 @@ def replay_policy(
             "selected_candidate": selected_label,
             "rows": len(selected),
             "submission_sha256": sha256_bytes(raw),
-            "official_seed_replay_score": official.final_score,
-            "official_seed_replay_breakdown": official.breakdown,
-            "invalid_experiments": len(official.invalid_experiments),
+            "selection_score": selection_result["final_score"],
+            "selection_score_semantics": "deterministic-stress",
+            "published_seed_available": published_seed_available,
+            "published_seed_replay_score": (
+                published.final_score if published is not None else None
+            ),
+            "published_seed_replay_breakdown": (
+                published.breakdown if published is not None else None
+            ),
+            "invalid_experiments": (
+                len(published.invalid_experiments)
+                if published is not None
+                else selection_result["invalid_experiments"]
+            ),
             "stress_seeds": stress,
             "stress_candidates": candidate_scores,
             "builder": {
@@ -227,6 +252,8 @@ def main() -> int:
         )
     except (OSError, json.JSONDecodeError, ValueError) as error:
         parser.error(str(error))
+    if args.reference_submission is not None and args.tasks != 1:
+        parser.error("--reference-submission requires --tasks 1")
 
     session = requests.Session()
     tasks = _items(_get_json(session, TASKS_URL, page=1, per_page=args.tasks))
@@ -275,18 +302,21 @@ def main() -> int:
                 cell_types=cell_types,
                 policy_id=policy_id,
             )
-            replay_score = result["official_seed_replay_score"]
+            replay_score = result["published_seed_replay_score"]
             result["estimated_public_rank"] = 1 + sum(
                 score > replay_score for score in score_values
-            ) if score_values else None
+            ) if score_values and replay_score is not None else None
             result["target_rank"] = args.target_rank
             result["target_cutoff"] = target_cutoff
             result["target_rank_replay"] = bool(
-                target_cutoff is not None and replay_score >= target_cutoff
+                target_cutoff is not None
+                and replay_score is not None
+                and replay_score >= target_cutoff
             )
             policies[policy_id] = result
             ids[policy_id] = result_ids
-            score_series[policy_id].append(replay_score)
+            if replay_score is not None:
+                score_series[policy_id].append(replay_score)
         overlaps = []
         if reference_ids is not None:
             overlaps.extend(
@@ -309,14 +339,25 @@ def main() -> int:
                 "split": _split(index, len(tasks)),
                 "target_rank": args.target_rank,
                 "target_cutoff": target_cutoff,
-                "best_replay_score": max(
-                    value["official_seed_replay_score"] for value in policies.values()
+                "best_selection_score": max(
+                    value["selection_score"] for value in policies.values()
+                ),
+                "best_published_seed_replay_score": max(
+                    (
+                        value["published_seed_replay_score"]
+                        for value in policies.values()
+                        if value["published_seed_replay_score"] is not None
+                    ),
+                    default=None,
                 ),
                 "best_estimated_rank": min(
-                    value["estimated_public_rank"]
-                    for value in policies.values()
-                    if value["estimated_public_rank"] is not None
-                ) if score_values else None,
+                    (
+                        value["estimated_public_rank"]
+                        for value in policies.values()
+                        if value["estimated_public_rank"] is not None
+                    ),
+                    default=None,
+                ),
                 "any_target_rank_replay": any(value["target_rank_replay"] for value in policies.values()),
                 "policies": policies,
                 "payload_overlaps": overlaps,
@@ -353,7 +394,10 @@ def main() -> int:
     }
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "method": "unknown-seed build -> frozen stress selection -> published-seed replay",
+        "method": (
+            "unknown-seed build -> frozen stress selection -> published-seed "
+            "replay only when non-placeholder seeds are public"
+        ),
         "split": "chronological 8 design / 3 selection / 4 final when 15 tasks are supplied",
         "task_count": len(tasks),
         "policies": list(policy_order),
