@@ -3,8 +3,10 @@ import pytest
 from tools.frozen_payload_stress_audit import (
     best_of_pair_summary,
     paired_summary,
+    parse_order_variant,
     parse_submission,
     percentile,
+    salted_order,
     submission_summary,
 )
 
@@ -69,3 +71,36 @@ def test_parse_submission_requires_label_and_path():
     assert parse_submission("control=/tmp/control.json")[0] == "control"
     with pytest.raises(Exception):
         parse_submission("missing-separator")
+
+
+def test_salted_order_is_deterministic_and_preserves_rows():
+    rows = [
+        {"experiment_id": "first", "value": 1},
+        {"experiment_id": "second", "value": 2},
+        {"experiment_id": "third", "value": 3},
+    ]
+
+    first = salted_order(rows, "rank30-order-a-v1")
+    second = salted_order(rows, "rank30-order-a-v1")
+
+    assert first == second
+    assert sorted(item["experiment_id"] for item in first) == [
+        "first",
+        "second",
+        "third",
+    ]
+    assert rows == [
+        {"experiment_id": "first", "value": 1},
+        {"experiment_id": "second", "value": 2},
+        {"experiment_id": "third", "value": 3},
+    ]
+
+
+def test_parse_order_variant_requires_source_and_salt():
+    assert parse_order_variant("candidate=base:rank30-order-a-v1") == (
+        "candidate",
+        "base",
+        "rank30-order-a-v1",
+    )
+    with pytest.raises(Exception):
+        parse_order_variant("candidate=base")

@@ -94,6 +94,23 @@ best-of-two portfolio had P25 `25.6670`, minimum `24.6432`, and maximum
 `005` is the stronger tail-diversification hypothesis. Neither is promoted
 before the current official result and additional prospective observations.
 
+### Deterministic row-order audit
+
+Stage 4 shuffles row indices with the round seed, so deterministic row ordering
+was tested as a seed-independent way to decorrelate fold composition without
+changing any experiment, weighted score, or fidelity. Three salts were screened
+only on ensembles 0-3. `rank30-order-a-v1` advanced because it produced the
+highest design-split best-of-two median and maximum while remaining below the
+correlation ceiling.
+
+The salt failed the sealed ensembles 4-7. Its individual median was only
+slightly higher than unpermuted `reservoir005` (`27.9925` versus `27.9275`),
+but the original order won 3/4 paired ensembles. The `tao1+reservoir005`
+portfolio also had better P25 (`27.6437` versus `27.4282`), maximum (`29.3036`
+versus `29.1592`), and lower correlation with `tao1` (`0.2419` versus
+`0.3794`). Deterministic ordering affects finite-fold scores but did not
+generalize as an improvement, so no ordering salt is deployed.
+
 Two other shapes were rejected. `champion-hybrid20-cas65-v3` gained
 consistency but lost `4.33%` stress score and `8.54%` weighted score versus the
 live canary. The experimental `champion-caslearn10-cas55-v4` lost `8.19%`
@@ -122,6 +139,10 @@ without rebuilding or uploading them with:
   --ensembles 8 \
   --output artifacts/research/top30_frozen_payload_stress.json
 ```
+
+The same tool accepts `--order-variant LABEL=SOURCE:SALT` and
+`--ensemble-offset N`. Use disjoint offsets for design and holdout; never choose
+a salt after inspecting its holdout results.
 
 Run the public, credential-free audit with:
 

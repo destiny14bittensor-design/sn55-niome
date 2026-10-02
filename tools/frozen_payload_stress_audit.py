@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import statistics
@@ -26,6 +27,35 @@ def parse_submission(value: str) -> tuple[str, Path]:
     if not separator or not label.strip() or not path.strip():
         raise argparse.ArgumentTypeError("--submission must be LABEL=PATH")
     return label.strip(), Path(path.strip())
+
+
+def parse_order_variant(value: str) -> tuple[str, str, str]:
+    label, separator, source_and_salt = value.partition("=")
+    source, salt_separator, salt = source_and_salt.partition(":")
+    if (
+        not separator
+        or not salt_separator
+        or not label.strip()
+        or not source.strip()
+        or not salt.strip()
+    ):
+        raise argparse.ArgumentTypeError(
+            "--order-variant must be LABEL=SOURCE_LABEL:SALT"
+        )
+    return label.strip(), source.strip(), salt.strip()
+
+
+def salted_order(rows: list[dict[str, Any]], salt: str) -> list[dict[str, Any]]:
+    """Return the same rows in a deterministic, domain-separated order."""
+    return sorted(
+        rows,
+        key=lambda item: (
+            hashlib.sha256(
+                f"{salt}|{item.get('experiment_id', '')}".encode()
+            ).digest(),
+            str(item.get("experiment_id", "")),
+        ),
+    )
 
 
 def percentile(values: list[float], fraction: float) -> float | None:
@@ -115,20 +145,38 @@ def main() -> int:
         required=True,
         help="repeat LABEL=PATH for each frozen payload",
     )
+    parser.add_argument(
+        "--order-variant",
+        action="append",
+        type=parse_order_variant,
+        default=[],
+        help="repeat LABEL=SOURCE_LABEL:SALT for deterministic row-order variants",
+    )
     parser.add_argument("--ensembles", type=int, default=8)
+    parser.add_argument("--ensemble-offset", type=int, default=0)
     parser.add_argument("--seeds-per-ensemble", type=int, default=3)
     parser.add_argument("--domain", default="top30-frozen-payload-v1")
     parser.add_argument("--chromosome", type=Path, default=ROOT / "data" / "chr11.fa")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    if args.ensembles < 1 or args.seeds_per_ensemble < 1:
-        parser.error("--ensembles and --seeds-per-ensemble must be positive")
+    if (
+        args.ensembles < 1
+        or args.seeds_per_ensemble < 1
+        or args.ensemble_offset < 0
+    ):
+        parser.error(
+            "--ensembles and --seeds-per-ensemble must be positive and "
+            "--ensemble-offset must be non-negative"
+        )
     submissions = dict(args.submission)
     if len(submissions) != len(args.submission):
         parser.error("submission labels must be unique")
-    if len(submissions) < 2:
-        parser.error("at least two submissions are required")
+    variant_labels = [label for label, _, _ in args.order_variant]
+    if len(set(variant_labels)) != len(variant_labels):
+        parser.error("order-variant labels must be unique")
+    if set(variant_labels) & set(submissions):
+        parser.error("submission and order-variant labels must be distinct")
 
     contract = _json(args.task_root / "contract.json")
     reference = _json(args.task_root / "hbb_reference.json")
@@ -155,11 +203,25 @@ def main() -> int:
         identities[label] = identifiers
         digests[label] = sha256_bytes(raw)
 
+    order_variants = {}
+    for label, source, salt in args.order_variant:
+        if source not in rows:
+            parser.error(f"order-variant source {source!r} is not a submission label")
+        value = salted_order(rows[source], salt)
+        raw = json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
+        rows[label] = value
+        identities[label] = set(identities[source])
+        digests[label] = sha256_bytes(raw)
+        order_variants[label] = {"source": source, "salt": salt}
+    if len(rows) < 2:
+        parser.error("at least two submissions or order variants are required")
+
     observations: dict[str, list[dict[str, Any]]] = {
-        label: [] for label in submissions
+        label: [] for label in rows
     }
     ensembles = []
-    for index in range(args.ensembles):
+    for local_index in range(args.ensembles):
+        index = args.ensemble_offset + local_index
         seeds = deterministic_stress_seeds(
             task_id,
             domain=f"{args.domain}|ensemble-{index}",
@@ -175,7 +237,7 @@ def main() -> int:
             manifest={"source": "frozen-payload-stress-audit"},
         )
         ensemble_results = {}
-        for label in submissions:
+        for label in rows:
             result = evaluate_submission(rows[label], artifacts)
             breakdown = result.breakdown
             observation = {
@@ -188,9 +250,13 @@ def main() -> int:
             observations[label].append(observation)
             ensemble_results[label] = observation
         ensembles.append({"index": index, "seeds": seeds, "results": ensemble_results})
-        print(f"evaluated ensemble {index + 1}/{args.ensembles}", flush=True)
+        print(
+            f"evaluated ensemble {local_index + 1}/{args.ensembles} "
+            f"(global {index})",
+            flush=True,
+        )
 
-    labels = list(submissions)
+    labels = list(rows)
     pairs = []
     for left_index, left in enumerate(labels):
         for right in labels[left_index + 1 :]:
@@ -211,8 +277,10 @@ def main() -> int:
         "method": "frozen payloads evaluated on paired deterministic synthetic seed triples",
         "task_id": task_id,
         "domain": args.domain,
+        "ensemble_offset": args.ensemble_offset,
         "seeds_per_ensemble": args.seeds_per_ensemble,
         "submission_sha256": digests,
+        "order_variants": order_variants,
         "summaries": {
             label: submission_summary(values)
             for label, values in observations.items()
